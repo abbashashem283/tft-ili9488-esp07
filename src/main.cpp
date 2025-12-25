@@ -10,13 +10,15 @@
 
 #define DE 0
 #define RE 0
+
+#define MAX_PAGE_NB 2
 // Touchscreen object
 XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);
 
 TFT_eSPI tft;
 
 ModbusMaster node;
-
+uint8_t page = 1;
 uint8_t soc = 0;
 uint8_t font_height = 0;
 float voltage = 0.0, current = 0.0, watts = 0.0;
@@ -28,29 +30,29 @@ bool bat_blink_white = true;
 
 unsigned long page1Info = 0;
 
-bool is_charging = false, is_idle = true, is_discharging = false, is_error = false;
+bool is_charging = false, is_idle = false, is_discharging = false, is_error = false;
 
 void preTransmission()
 {
   digitalWrite(DE, HIGH);
   digitalWrite(RE, HIGH);
-  delayMicroseconds(300);
+  // delayMicroseconds(300);
 }
 
 void postTransmission()
 {
   digitalWrite(DE, LOW);
   digitalWrite(RE, LOW);
-  delayMicroseconds(300);
+  // delayMicroseconds(300);
 }
 
-void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16 fc = TFT_WHITE)
+void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16 fc = TFT_WHITE, const GFXfont *font = &FreeSans18pt7b)
 {
   TFT_eSprite sprite = TFT_eSprite(&tft);
   sprite.createSprite(w, h);
 
   // Explicit font and colors
-  sprite.setFreeFont(&FreeSans18pt7b); // match whatever you used on tft
+  sprite.setFreeFont(font); // match whatever you used on tft
   sprite.setTextColor(fc, TFT_BLACK);
 
   // Fill background
@@ -66,7 +68,9 @@ void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, ui
 
 void batteryChargeModeChanged()
 {
-  if (is_charging)
+  if (is_idle)
+    charge_color = TFT_WHITE;
+  else if (is_charging)
     charge_color = TFT_GREEN;
   else if (is_discharging)
     charge_color = TFT_YELLOW;
@@ -74,20 +78,18 @@ void batteryChargeModeChanged()
 
 void drawBatterySOC()
 {
-  if (is_error)
+  if (is_error || page != 1)
     return;
-  if (is_charging || is_idle)
-  {
-    if (soc > 0)
-      tft.fillRect(196, 197, 88, 36, TFT_WHITE);
-    if (soc >= 50)
-      tft.fillRect(196, 160, 88, 36, TFT_WHITE);
-    if (soc >= 75)
-      tft.fillRect(196, 123, 88, 36, TFT_WHITE);
-    if (soc >= 80)
-      tft.fillRect(196, 86, 88, 36, TFT_WHITE);
-  }
-  else if (is_discharging)
+
+  if (soc > 0)
+    tft.fillRect(196, 197, 88, 36, TFT_WHITE);
+  if (soc >= 50)
+    tft.fillRect(196, 160, 88, 36, TFT_WHITE);
+  if (soc >= 75)
+    tft.fillRect(196, 123, 88, 36, TFT_WHITE);
+  if (soc >= 80)
+    tft.fillRect(196, 86, 88, 36, TFT_WHITE);
+  if (is_discharging)
   {
     if (soc < 80)
       tft.fillRect(196, 86, 88, 36, TFT_BLACK);
@@ -110,6 +112,8 @@ void drawBattery()
 
 void drawPage1Info()
 {
+  if (page != 1)
+    return;
   printString(String(voltage) + "V", 33, 89, 135, font_height);
   printString(String(watts) + "kW", 33, 191, 135, font_height, charge_color);
   printString(String(soc) + "%", 357, 89, 110, font_height);
@@ -134,6 +138,11 @@ void getBatteryInfo()
 
   if (result == node.ku8MBSuccess)
   {
+    if (is_error)
+    {
+      tft.fillRect(0, 0, 200, font_height, TFT_BLACK);
+      is_error = false;
+    }
     uint8_t newSOC = node.getResponseBuffer(11);
     if (soc != newSOC)
     {
@@ -142,7 +151,17 @@ void getBatteryInfo()
     }
     voltage = node.getResponseBuffer(6) / 100.0f;
     uint16_t raw_current = node.getResponseBuffer(7);
-    if (raw_current >= 30000)
+    if (raw_current == 0)
+    {
+      if (!is_idle)
+      {
+        is_idle = true;
+        batteryChargeModeChanged();
+      }
+      is_charging = false;
+      is_discharging = false;
+    }
+    else if (raw_current >= 30000)
     {
       if (is_charging == false)
       {
@@ -169,26 +188,29 @@ void getBatteryInfo()
   }
   else
   {
-    is_error = true;
-    tft.setCursor(10, 30);
-    tft.setFreeFont(&FreeSans12pt7b);
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.print("COM Error: ");
-    tft.print(result);
-    tft.setFreeFont(&FreeSans18pt7b);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    if (!is_error)
+    {
+      tft.setCursor(10, 30);
+      tft.setFreeFont(&FreeSans12pt7b);
+      tft.setTextColor(TFT_RED, TFT_BLACK);
+      tft.print("COM Error: ");
+      tft.print(result);
+      tft.setFreeFont(&FreeSans18pt7b);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      is_error = true;
+    }
   }
 }
 
 void animateBattery()
 {
-  if (is_error || !is_charging)
+  if (is_error || !is_charging || page != 1)
     return;
   if (millis() - bat_blink >= 1000)
   {
     uint32_t color = bat_blink_white ? TFT_BLACK : TFT_WHITE;
     bat_blink_white = !bat_blink_white;
-    drawBatterySOC();
+    // drawBatterySOC();
     if (soc <= 25)
     {
       tft.fillRect(196, 197, 88, 36, color);
@@ -213,6 +235,74 @@ void drawBottomNav()
 {
   tft.fillTriangle(391, 269, 427, 287, 391, 305, TFT_GREEN);
   tft.fillTriangle(50, 287, 86, 269, 86, 305, TFT_GREEN);
+}
+
+bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint32_t w, uint32_t h)
+{
+  uint16_t px = (p.x * 480) / 4095;
+  uint16_t py = (p.y * 320) / 4095;
+  Serial.println("px " + String(px) + " py " + String(py));
+  return (px > x && px < x + w && py > y && py < y + h);
+}
+
+void clearPage(uint8_t p)
+{
+  switch (p)
+  {
+  case 1:
+    tft.fillRect(188, 67, 104, 176, TFT_BLACK);
+    tft.fillRect(33, 89, 135, font_height, TFT_BLACK);
+    tft.fillRect(33, 191, 135, font_height, TFT_BLACK);
+    tft.fillRect(357, 89, 110, font_height, TFT_BLACK);
+    tft.fillRect(357, 191, 110, font_height, TFT_BLACK);
+    break;
+
+  case 2:{
+    uint16_t x = 40, y = 10;
+    for (uint8_t i = 0; i < 4; ++i)
+    {
+      tft.fillRect(x,y, 400, 25, TFT_BLACK);
+      x=40;
+      y+=70;
+    }
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+void drawPage(uint8_t p)
+{
+  p = p > MAX_PAGE_NB ? 1 : p;
+  p = p < 1 ? MAX_PAGE_NB : p;
+
+  if (p != page)
+  {
+    clearPage(page);
+  }
+  if (p == 1 && page != 1)
+  {
+    page = 1;
+    drawBattery();
+    drawPage1Info();
+  }
+  if (p == 2 && page != 2)
+  {
+    page = 2;
+  
+    uint16_t x = 40, y = 10;
+    for (uint8_t i = 0; i < 4; ++i)
+    {
+      for (uint8_t j = 0; j < 4; ++j)
+      {
+        printString("33.35V", x, y, 135, font_height, TFT_WHITE, &FreeSans12pt7b);
+        x += 110;
+      }
+      x=40;
+      y+=70;
+    }
+  }
 }
 
 void setup()
@@ -246,12 +336,6 @@ void setup()
   drawBattery();
   drawPage1Info();
   drawBottomNav();
-  // TFT_eSprite sprite = TFT_eSprite(&tft);
-  // sprite.createSprite(200, 100);
-  // sprite.fillSprite(TFT_BLUE);
-  // sprite.pushSprite(50, 50);
-  // sprite.deleteSprite();
-  // printString("M",50,50,28,font_height);
 }
 
 void loop()
@@ -259,22 +343,24 @@ void loop()
 
   if (ts.touched())
   {
-
+    Serial.println("touched");
     TS_Point p = ts.getPoint();
-    uint16_t x = (p.x * 480) / 4095;
-    uint16_t y = (p.y * 320) / 4095;
-    Serial1.print("X: ");
-    Serial1.print(x);
-    Serial1.print(" Y: ");
-    Serial1.print(y);
-    Serial1.print(" Z: ");
-    Serial1.println(p.z);
+    if (touchIn(p, 350, 230, 46, 46))
+    {
+      // Serial.println("x y touch");
+      drawPage(page + 1);
+    }
+    if (touchIn(p, 55, 250, 46, 46))
+    {
+
+      drawPage(page - 1);
+    }
   }
   animateBattery();
 
   if (millis() - page1Info >= 500)
   {
-    getBatteryInfo();
+    // getBatteryInfo();
     drawPage1Info();
     page1Info = millis();
   }
