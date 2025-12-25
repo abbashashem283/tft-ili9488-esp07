@@ -18,14 +18,17 @@ TFT_eSPI tft;
 ModbusMaster node;
 
 uint8_t soc = 0;
+uint8_t font_height = 0;
 float voltage = 0.0, current = 0.0, watts = 0.0;
+
+uint16_t charge_color = TFT_WHITE;
 
 unsigned long bat_blink = 0;
 bool bat_blink_white = true;
 
 unsigned long page1Info = 0;
 
-bool is_charging = false, is_idle = false, is_discharging = false, is_error = false;
+bool is_charging = false, is_idle = true, is_discharging = false, is_error = false;
 
 void preTransmission()
 {
@@ -41,22 +44,60 @@ void postTransmission()
   delayMicroseconds(300);
 }
 
-void clearPrint(uint16_t x, uint16_t y ,String text){
-  int16_t h = tft.fontHeight();
-  tft.fillRect(x, y-h, tft.textWidth(text), h+10, TFT_BLACK);
+void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16 fc = TFT_WHITE)
+{
+  TFT_eSprite sprite = TFT_eSprite(&tft);
+  sprite.createSprite(w, h);
+
+  // Explicit font and colors
+  sprite.setFreeFont(&FreeSans18pt7b); // match whatever you used on tft
+  sprite.setTextColor(fc, TFT_BLACK);
+
+  // Fill background
+  sprite.fillSprite(TFT_BLACK);
+
+  // Draw text with baseline offset
+  sprite.drawString(text, 0, 0);
+
+  // Push to screen
+  sprite.pushSprite(x, y);
+  sprite.deleteSprite();
+}
+
+void batteryChargeModeChanged()
+{
+  if (is_charging)
+    charge_color = TFT_GREEN;
+  else if (is_discharging)
+    charge_color = TFT_YELLOW;
 }
 
 void drawBatterySOC()
 {
-  if(is_error) return;
-  if (soc > 0)
-    tft.fillRect(196, 197, 88, 36, TFT_WHITE);
-  if (soc >= 50)
-    tft.fillRect(196, 160, 88, 36, TFT_WHITE);
-  if (soc >= 75)
-    tft.fillRect(196, 123, 88, 36, TFT_WHITE);
-  if (soc >= 90)
-    tft.fillRect(196, 86, 88, 36, TFT_WHITE);
+  if (is_error)
+    return;
+  if (is_charging || is_idle)
+  {
+    if (soc > 0)
+      tft.fillRect(196, 197, 88, 36, TFT_WHITE);
+    if (soc >= 50)
+      tft.fillRect(196, 160, 88, 36, TFT_WHITE);
+    if (soc >= 75)
+      tft.fillRect(196, 123, 88, 36, TFT_WHITE);
+    if (soc >= 80)
+      tft.fillRect(196, 86, 88, 36, TFT_WHITE);
+  }
+  else if (is_discharging)
+  {
+    if (soc < 80)
+      tft.fillRect(196, 86, 88, 36, TFT_BLACK);
+    if (soc < 75)
+      tft.fillRect(196, 123, 88, 36, TFT_BLACK);
+    if (soc < 50)
+      tft.fillRect(196, 160, 88, 36, TFT_BLACK);
+    if (soc <= 0)
+      tft.fillRect(196, 197, 88, 36, TFT_BLACK);
+  }
 }
 
 void drawBattery()
@@ -69,19 +110,10 @@ void drawBattery()
 
 void drawPage1Info()
 {
-  //if(is_error) return;
-  //tft.setCursor(33, 89);
-  // clearPrint(33,89,"     ");
-  tft.drawString(String(voltage)+"V", 33, 89);
-  //tft.setCursor(14, 191);
-  // clearPrint(14,191,"    ");
-  tft.drawString(String(watts) + "kW", 14,191);
-  //tft.setCursor(346, 89);
-  // clearPrint(346,89,"   ");
-  tft.drawString(String(soc)+"%",346,89);
-  //tft.setCursor(327, 191);
-  // clearPrint(327,191,"    ");
-  tft.drawString(String(current) + "A", 327,191);
+  printString(String(voltage) + "V", 33, 89, 135, font_height);
+  printString(String(watts) + "kW", 33, 191, 135, font_height, charge_color);
+  printString(String(soc) + "%", 357, 89, 110, font_height);
+  printString(String(current, 1) + "A", 357, 191, 110, font_height, charge_color);
 }
 
 uint8_t idealVoltage(float voltage)
@@ -102,22 +134,35 @@ void getBatteryInfo()
 
   if (result == node.ku8MBSuccess)
   {
-    Serial1.println("Response received:");
-    soc = node.getResponseBuffer(11);
+    uint8_t newSOC = node.getResponseBuffer(11);
+    if (soc != newSOC)
+    {
+      soc = newSOC;
+      drawBatterySOC();
+    }
     voltage = node.getResponseBuffer(6) / 100.0f;
     uint16_t raw_current = node.getResponseBuffer(7);
     if (raw_current >= 30000)
     {
-      is_charging = true;
+      if (is_charging == false)
+      {
+        is_charging = true;
+        batteryChargeModeChanged();
+      }
+
       is_idle = false;
       is_discharging = false;
       current = (65535 - raw_current) / 10.0f;
     }
     else
     {
+      if (is_discharging == false)
+      {
+        is_discharging = true;
+        batteryChargeModeChanged();
+      }
       is_charging = false;
       is_idle = false;
-      is_discharging = true;
       current = raw_current / 10.0f;
     }
     watts = (current * idealVoltage(voltage)) / 1000.0f;
@@ -137,7 +182,8 @@ void getBatteryInfo()
 
 void animateBattery()
 {
-  if(is_error || !is_charging) return;
+  if (is_error || !is_charging)
+    return;
   if (millis() - bat_blink >= 1000)
   {
     uint32_t color = bat_blink_white ? TFT_BLACK : TFT_WHITE;
@@ -195,10 +241,17 @@ void setup()
   tft.setTextColor(TFT_WHITE, TFT_BLACK); // white text, red background
   tft.setTextSize(1);
   tft.setFreeFont(&FreeSans18pt7b);
+  font_height = tft.fontHeight();
 
   drawBattery();
   drawPage1Info();
   drawBottomNav();
+  // TFT_eSprite sprite = TFT_eSprite(&tft);
+  // sprite.createSprite(200, 100);
+  // sprite.fillSprite(TFT_BLUE);
+  // sprite.pushSprite(50, 50);
+  // sprite.deleteSprite();
+  // printString("M",50,50,28,font_height);
 }
 
 void loop()
@@ -225,10 +278,6 @@ void loop()
     drawPage1Info();
     page1Info = millis();
   }
-
-  
-  
-
 }
 
 // #include <Arduino.h>
