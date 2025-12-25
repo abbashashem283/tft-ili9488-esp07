@@ -261,7 +261,7 @@ void clearPage(uint8_t p)
     uint16_t x = 40, y = 10;
     for (uint8_t i = 0; i < 4; ++i)
     {
-      tft.fillRect(x,y, 400, 25, TFT_BLACK);
+      tft.fillRect(x,y, 410, 25, TFT_BLACK);
       x=40;
       y+=70;
     }
