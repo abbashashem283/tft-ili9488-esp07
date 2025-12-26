@@ -32,6 +32,8 @@ unsigned long page1Info = 0;
 
 bool is_charging = false, is_idle = false, is_discharging = false, is_error = false;
 
+uint8_t nb_of_cells = 0;
+
 void preTransmission()
 {
   digitalWrite(DE, HIGH);
@@ -56,7 +58,7 @@ void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, ui
   sprite.setTextColor(fc, TFT_BLACK);
 
   // Fill background
-  sprite.fillSprite(TFT_BLACK);
+  //sprite.fillSprite(TFT_BLACK);
 
   // Draw text with baseline offset
   sprite.drawString(text, 0, 0);
@@ -132,8 +134,43 @@ uint8_t idealVoltage(float voltage)
   return nominal;
 }
 
-void getBatteryInfo()
+void clearPage(uint8_t p)
 {
+  switch (p)
+  {
+  case 1:
+    tft.fillRect(188, 67, 104, 176, TFT_BLACK);
+    tft.fillRect(33, 89, 135, font_height, TFT_BLACK);
+    tft.fillRect(33, 191, 135, font_height, TFT_BLACK);
+    tft.fillRect(357, 89, 110, font_height, TFT_BLACK);
+    tft.fillRect(357, 191, 110, font_height, TFT_BLACK);
+    break;
+
+  case 2:
+  {
+    uint16_t x = 40, y = 10;
+    for (uint8_t i = 0; i < 4; ++i)
+    {
+      tft.fillRect(x, y, 410, 25, TFT_BLACK);
+      x = 40;
+      y += 70;
+    }
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+void renderPage(uint8_t p)
+{
+  p = p > MAX_PAGE_NB ? 1 : p;
+  p = p < 1 ? MAX_PAGE_NB : p;
+
+  if (p != page)
+  {
+    clearPage(page);
+  }
   uint8_t result = node.readHoldingRegisters(0x1300, 74);
 
   if (result == node.ku8MBSuccess)
@@ -143,48 +180,95 @@ void getBatteryInfo()
       tft.fillRect(0, 0, 200, font_height, TFT_BLACK);
       is_error = false;
     }
-    uint8_t newSOC = node.getResponseBuffer(11);
-    if (soc != newSOC)
+    uint16_t raw_voltage = node.getResponseBuffer(6);
+    switch (p)
     {
-      soc = newSOC;
-      drawBatterySOC();
-    }
-    voltage = node.getResponseBuffer(6) / 100.0f;
-    uint16_t raw_current = node.getResponseBuffer(7);
-    if (raw_current == 0)
+    case 1:
     {
-      if (!is_idle)
+      if (p != page)
+        drawBattery();
+      voltage = raw_voltage / 100.0f;
+      uint8_t newSOC = node.getResponseBuffer(11);
+      if (soc != newSOC)
       {
-        is_idle = true;
-        batteryChargeModeChanged();
+        soc = newSOC;
+        drawBatterySOC();
       }
-      is_charging = false;
-      is_discharging = false;
-    }
-    else if (raw_current >= 30000)
-    {
-      if (is_charging == false)
+      uint16_t raw_current = node.getResponseBuffer(7);
+      if (raw_current == 0)
       {
-        is_charging = true;
-        batteryChargeModeChanged();
+        if (!is_idle)
+        {
+          is_idle = true;
+          batteryChargeModeChanged();
+        }
+        is_charging = false;
+        is_discharging = false;
       }
+      else if (raw_current >= 30000)
+      {
+        if (is_charging == false)
+        {
+          is_charging = true;
+          batteryChargeModeChanged();
+        }
 
-      is_idle = false;
-      is_discharging = false;
-      current = (65535 - raw_current) / 10.0f;
-    }
-    else
-    {
-      if (is_discharging == false)
-      {
-        is_discharging = true;
-        batteryChargeModeChanged();
+        is_idle = false;
+        is_discharging = false;
+        current = (65535 - raw_current) / 10.0f;
       }
-      is_charging = false;
-      is_idle = false;
-      current = raw_current / 10.0f;
+      else
+      {
+        if (is_discharging == false)
+        {
+          is_discharging = true;
+          batteryChargeModeChanged();
+        }
+        is_charging = false;
+        is_idle = false;
+        current = raw_current / 10.0f;
+      }
+      watts = (current * idealVoltage(voltage)) / 1000.0f;
+      drawPage1Info();
+      break;
     }
-    watts = (current * idealVoltage(voltage)) / 1000.0f;
+    case 2:
+    {
+      uint16_t x = 40, y = 10;
+      uint8_t r = 42;
+      uint16_t accumulated_volts = 0.0;
+      static std::vector<uint16_t> raw_cell_values ;
+      if(raw_cell_values.size() >= 100) raw_cell_values.clear();
+      for (uint8_t i = 0; i < 100; ++i)
+      {
+      uint8_t vs = raw_cell_values.size();
+        uint16_t raw_cell_volt = node.getResponseBuffer(r);
+        float cell_volt = raw_cell_volt / 1000.0f;
+        accumulated_volts += raw_cell_volt;
+        if(vs > i || raw_cell_values.at(i) - raw_cell_volt >= 20){
+          printString(String(cell_volt, 2), x, y, 135, font_height, TFT_WHITE, &FreeSans12pt7b);
+        }
+        if(i < vs)
+          raw_cell_values[i] = raw_cell_volt;
+        else
+          raw_cell_values.push_back(raw_cell_volt);  
+        x += 110;
+        if ((i + 1) % 4 == 0)
+        {
+          x = 40;
+          y += 70;
+        }
+        // Serial1.print("av ");
+        // Serial1.print(accumulated_volts);
+        // Serial1.print(" v ");
+        // Serial1.print(raw_voltage);
+        // Serial1.println();
+        if (raw_voltage * 10 - accumulated_volts <= 50)
+          break;
+        ++r;
+      }
+    }
+    }
   }
   else
   {
@@ -200,6 +284,8 @@ void getBatteryInfo()
       is_error = true;
     }
   }
+  
+    page = p;
 }
 
 void animateBattery()
@@ -245,32 +331,7 @@ bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint32_t w, uint32_t h)
   return (px > x && px < x + w && py > y && py < y + h);
 }
 
-void clearPage(uint8_t p)
-{
-  switch (p)
-  {
-  case 1:
-    tft.fillRect(188, 67, 104, 176, TFT_BLACK);
-    tft.fillRect(33, 89, 135, font_height, TFT_BLACK);
-    tft.fillRect(33, 191, 135, font_height, TFT_BLACK);
-    tft.fillRect(357, 89, 110, font_height, TFT_BLACK);
-    tft.fillRect(357, 191, 110, font_height, TFT_BLACK);
-    break;
 
-  case 2:{
-    uint16_t x = 40, y = 10;
-    for (uint8_t i = 0; i < 4; ++i)
-    {
-      tft.fillRect(x,y, 410, 25, TFT_BLACK);
-      x=40;
-      y+=70;
-    }
-    break;
-  }
-  default:
-    break;
-  }
-}
 
 void drawPage(uint8_t p)
 {
@@ -290,7 +351,7 @@ void drawPage(uint8_t p)
   if (p == 2 && page != 2)
   {
     page = 2;
-  
+
     uint16_t x = 40, y = 10;
     for (uint8_t i = 0; i < 4; ++i)
     {
@@ -299,8 +360,8 @@ void drawPage(uint8_t p)
         printString("33.35V", x, y, 135, font_height, TFT_WHITE, &FreeSans12pt7b);
         x += 110;
       }
-      x=40;
-      y+=70;
+      x = 40;
+      y += 70;
     }
   }
 }
@@ -348,12 +409,12 @@ void loop()
     if (touchIn(p, 350, 230, 46, 46))
     {
       // Serial.println("x y touch");
-      drawPage(page + 1);
+      renderPage(page + 1);
     }
     if (touchIn(p, 55, 250, 46, 46))
     {
 
-      drawPage(page - 1);
+      renderPage(page - 1);
     }
   }
   animateBattery();
@@ -361,7 +422,7 @@ void loop()
   if (millis() - page1Info >= 500)
   {
     // getBatteryInfo();
-    drawPage1Info();
+    renderPage(page);
     page1Info = millis();
   }
 }
