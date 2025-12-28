@@ -11,7 +11,7 @@
 #define DE 0
 #define RE 0
 
-#define MAX_PAGE_NB 2
+#define MAX_PAGE_NB 3
 // Touchscreen object
 XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);
 
@@ -60,7 +60,7 @@ void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, ui
   sprite.setTextColor(fc, TFT_BLACK);
 
   // Fill background
-  //sprite.fillSprite(TFT_BLUE);
+  sprite.fillSprite(TFT_BLUE);
 
   // Draw text with baseline offset
   sprite.drawString(text, 0, 0);
@@ -132,6 +132,46 @@ uint8_t idealVoltage(float voltage)
   return nominal;
 }
 
+void arrow_button(uint16_t x,
+                  uint16_t y,
+                  uint16_t bgColor,
+                  uint16_t fgColor,
+                  uint16_t size)
+{
+  uint16_t r = size;
+
+  // Draw the circle (background)
+  tft.fillCircle(x, y, r, bgColor);
+
+  // Triangle dimensions
+  uint16_t triWidth  = r * 1.2;  // width slightly larger than radius
+  uint16_t triHeight = r * 1.2;  // height slightly larger than radius
+
+  // Calculate triangle points (centered)
+  int16_t x0 = x - triWidth / 2;  // left base
+  int16_t y0 = y - triHeight / 2;
+
+  int16_t x1 = x0;
+  int16_t y1 = y + triHeight / 2;
+
+  int16_t x2 = x + triWidth / 2;  // tip
+  int16_t y2 = y;
+
+  tft.fillTriangle(x0, y0, x1, y1, x2, y2, fgColor);
+}
+
+
+
+
+
+
+void selector(String options, uint16_t text_x, uint16_t text_y, uint8_t text_width, uint8_t text_height){
+  arrow_button(text_x-35,text_y+20,TFT_GREEN,TFT_BLACK,20);
+  printString(options,text_x,text_y,100,font_height);
+  arrow_button(text_x + tft.textWidth(options) + 35,text_y+20,TFT_GREEN,TFT_BLACK,20);
+
+}
+
 void clearPage(uint8_t p)
 {
   switch (p)
@@ -195,15 +235,22 @@ void renderPage(uint8_t p)
       {
         drawBattery();
         drawBatterySOC();
+        drawPage1Info();
       }
-      voltage = raw_voltage / 100.0f;
+      float new_voltage = raw_voltage / 100.0f;
+      if(new_voltage != voltage){
+        voltage = new_voltage;
+        printString(String(voltage) + "V", 33, 89, 135, font_height);
+      }
       uint8_t newSOC = node.getResponseBuffer(11);
       if (soc != newSOC)
       {
         soc = newSOC;
+        printString(String(soc) + "%", 357, 89, 110, font_height);
         drawBatterySOC();
       }
       uint16_t raw_current = node.getResponseBuffer(7);
+      float new_current = 0.0;
       if (raw_current == 0)
       {
         if (!is_idle)
@@ -224,7 +271,7 @@ void renderPage(uint8_t p)
 
         is_idle = false;
         is_discharging = false;
-        current = (65535 - raw_current) / 10.0f;
+        new_current = (65535 - raw_current) / 10.0f;
       }
       else
       {
@@ -235,10 +282,15 @@ void renderPage(uint8_t p)
         }
         is_charging = false;
         is_idle = false;
-        current = raw_current / 10.0f;
+        new_current = raw_current / 10.0f;
       }
-      watts = (current * idealVoltage(voltage)) / 1000.0f;
-      drawPage1Info();
+      if(current != new_current){
+        current = new_current;
+        watts = (current * idealVoltage(voltage)) / 1000.0f;
+        printString(String(watts) + "kW", 33, 191, 135, font_height, charge_color);
+        printString(String(current, 1) + "A", 357, 191, 110, font_height, charge_color);
+      }
+      //drawPage1Info();
       break;
     }
     case 2:
@@ -284,8 +336,17 @@ void renderPage(uint8_t p)
           break;
         ++r;
       }
+      break;
     }
+    case 3: {
+      if(page == 3) return;
+      printString("Baud",50,50,tft.textWidth("Baud"),font_height,TFT_WHITE);
+      //selector("", 350, 50, 200, font_height);
+      selector("9600", 250, 50, 200, font_height);
+      selector("115200", 250, 200, 200, font_height);
+      break;
     }
+  }
   
  
 
@@ -351,7 +412,7 @@ void setup()
   node.begin(1, Serial); // Slave ID = 1
   node.preTransmission(preTransmission);
   node.postTransmission(postTransmission);
-  delay(10000);
+  delay(3000);
   // SPI.begin();  // GPIO14=SCK, GPIO13=MOSI, GPIO12=MISO
   ts.begin();
   ts.setRotation(3); // Adjust rotation to match your TFT
@@ -367,6 +428,8 @@ void setup()
   drawBattery();
   drawPage1Info();
   drawBottomNav();
+
+  renderPage(3);
 }
 
 
@@ -391,7 +454,7 @@ void loop()
   }
     // getBatteryInfo();
     if(millis() - page1Info >= 1000){
-      modbusInfo();
+      //modbusInfo();
       renderPage(page);
       page1Info= millis();
     }
