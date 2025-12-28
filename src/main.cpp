@@ -60,7 +60,7 @@ void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, ui
   sprite.setTextColor(fc, TFT_BLACK);
 
   // Fill background
-  // sprite.fillSprite(TFT_BLACK);
+  //sprite.fillSprite(TFT_BLUE);
 
   // Draw text with baseline offset
   sprite.drawString(text, 0, 0);
@@ -247,9 +247,9 @@ void renderPage(uint8_t p)
       uint8_t r = 42;
       uint16_t accumulated_volts = 0.0;
       static std::vector<uint16_t> raw_cell_values;
-      Serial1.print("page = ");
-      Serial1.print(page);
-      Serial1.println(" vs " + String(raw_cell_values.size()));
+      // Serial1.print("page = ");
+      // Serial1.print(page);
+      // Serial1.println(" vs " + String(raw_cell_values.size()));
       if (page != 2)
         raw_cell_values.clear();
       if (raw_cell_values.size() >= 100)
@@ -262,7 +262,8 @@ void renderPage(uint8_t p)
         accumulated_volts += raw_cell_volt;
         if (i >= vs || std::abs(raw_cell_values.at(i) - raw_cell_volt) >= 20)
         {
-          printString(String(cell_volt, 2), x, y, 135, font_height, TFT_WHITE, &FreeSans12pt7b);
+          //Serial1.println(cell_volt);
+          printString(String(cell_volt, 2), x, y, 55, font_height, TFT_WHITE, &FreeSans12pt7b);
           if (i < vs)
             raw_cell_values[i] = raw_cell_volt;
           else
