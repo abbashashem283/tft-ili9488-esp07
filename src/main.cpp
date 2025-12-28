@@ -18,6 +18,7 @@ XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);
 TFT_eSPI tft;
 
 ModbusMaster node;
+bool modbus_busy = false;
 uint8_t page = 1;
 uint8_t soc = 0;
 uint8_t font_height = 0;
@@ -26,6 +27,7 @@ float voltage = 0.0, current = 0.0, watts = 0.0;
 uint16_t charge_color = TFT_WHITE;
 
 unsigned long bat_blink = 0;
+unsigned long touch = 0;
 bool bat_blink_white = true;
 
 unsigned long page1Info = 0;
@@ -38,14 +40,14 @@ void preTransmission()
 {
   digitalWrite(DE, HIGH);
   digitalWrite(RE, HIGH);
-  // delayMicroseconds(300);
+  //delayMicroseconds(300);
 }
 
 void postTransmission()
 {
   digitalWrite(DE, LOW);
   digitalWrite(RE, LOW);
-  // delayMicroseconds(300);
+  //delayMicroseconds(300);
 }
 
 void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16 fc = TFT_WHITE, const GFXfont *font = &FreeSans18pt7b)
@@ -58,7 +60,7 @@ void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, ui
   sprite.setTextColor(fc, TFT_BLACK);
 
   // Fill background
-  //sprite.fillSprite(TFT_BLACK);
+  // sprite.fillSprite(TFT_BLACK);
 
   // Draw text with baseline offset
   sprite.drawString(text, 0, 0);
@@ -80,24 +82,22 @@ void batteryChargeModeChanged()
 
 void drawBatterySOC()
 {
-  if (is_error || page != 1)
-    return;
 
   if (soc > 0)
     tft.fillRect(196, 197, 88, 36, TFT_WHITE);
   if (soc >= 50)
     tft.fillRect(196, 160, 88, 36, TFT_WHITE);
-  if (soc >= 75)
+  if (soc > 50)
     tft.fillRect(196, 123, 88, 36, TFT_WHITE);
-  if (soc >= 80)
+  if (soc >= 75)
     tft.fillRect(196, 86, 88, 36, TFT_WHITE);
   if (is_discharging)
   {
     if (soc < 80)
       tft.fillRect(196, 86, 88, 36, TFT_BLACK);
-    if (soc < 75)
+    if (soc <= 50)
       tft.fillRect(196, 123, 88, 36, TFT_BLACK);
-    if (soc < 50)
+    if (soc <= 25)
       tft.fillRect(196, 160, 88, 36, TFT_BLACK);
     if (soc <= 0)
       tft.fillRect(196, 197, 88, 36, TFT_BLACK);
@@ -114,8 +114,6 @@ void drawBattery()
 
 void drawPage1Info()
 {
-  if (page != 1)
-    return;
   printString(String(voltage) + "V", 33, 89, 135, font_height);
   printString(String(watts) + "kW", 33, 191, 135, font_height, charge_color);
   printString(String(soc) + "%", 357, 89, 110, font_height);
@@ -162,6 +160,20 @@ void clearPage(uint8_t p)
   }
 }
 
+void errorStatChanged(uint8_t result) {
+  if(is_error)
+    printString("COM ERROR: " + String(result), 140, 284, 200, font_height, TFT_RED, &FreeSans12pt7b);
+  else
+    tft.fillRect(140,284,200,font_height,TFT_BLACK);        
+}
+
+void modbusInfo(){
+  uint8_t result = node.readHoldingRegisters(0x1300, 74);
+  bool old_error = is_error ;
+  is_error = result != node.ku8MBSuccess ;
+  if(is_error != old_error) errorStatChanged(result);
+}
+
 void renderPage(uint8_t p)
 {
   p = p > MAX_PAGE_NB ? 1 : p;
@@ -171,22 +183,19 @@ void renderPage(uint8_t p)
   {
     clearPage(page);
   }
-  uint8_t result = node.readHoldingRegisters(0x1300, 74);
 
-  if (result == node.ku8MBSuccess)
-  {
-    if (is_error)
-    {
-      tft.fillRect(0, 0, 200, font_height, TFT_BLACK);
-      is_error = false;
-    }
+  if(is_error) return ;
+    
     uint16_t raw_voltage = node.getResponseBuffer(6);
     switch (p)
     {
     case 1:
     {
       if (p != page)
+      {
         drawBattery();
+        drawBatterySOC();
+      }
       voltage = raw_voltage / 100.0f;
       uint8_t newSOC = node.getResponseBuffer(11);
       if (soc != newSOC)
@@ -237,21 +246,28 @@ void renderPage(uint8_t p)
       uint16_t x = 40, y = 10;
       uint8_t r = 42;
       uint16_t accumulated_volts = 0.0;
-      static std::vector<uint16_t> raw_cell_values ;
-      if(raw_cell_values.size() >= 100) raw_cell_values.clear();
+      static std::vector<uint16_t> raw_cell_values;
+      Serial1.print("page = ");
+      Serial1.print(page);
+      Serial1.println(" vs " + String(raw_cell_values.size()));
+      if (page != 2)
+        raw_cell_values.clear();
+      if (raw_cell_values.size() >= 100)
+        raw_cell_values.clear();
       for (uint8_t i = 0; i < 100; ++i)
       {
-      uint8_t vs = raw_cell_values.size();
+        uint8_t vs = raw_cell_values.size();
         uint16_t raw_cell_volt = node.getResponseBuffer(r);
         float cell_volt = raw_cell_volt / 1000.0f;
         accumulated_volts += raw_cell_volt;
-        if(vs > i || raw_cell_values.at(i) - raw_cell_volt >= 20){
+        if (i >= vs || std::abs(raw_cell_values.at(i) - raw_cell_volt) >= 20)
+        {
           printString(String(cell_volt, 2), x, y, 135, font_height, TFT_WHITE, &FreeSans12pt7b);
+          if (i < vs)
+            raw_cell_values[i] = raw_cell_volt;
+          else
+            raw_cell_values.push_back(raw_cell_volt);
         }
-        if(i < vs)
-          raw_cell_values[i] = raw_cell_volt;
-        else
-          raw_cell_values.push_back(raw_cell_volt);  
         x += 110;
         if ((i + 1) % 4 == 0)
         {
@@ -262,60 +278,47 @@ void renderPage(uint8_t p)
         // Serial1.print(accumulated_volts);
         // Serial1.print(" v ");
         // Serial1.print(raw_voltage);
-        // Serial1.println();
+        // Serial1.println("=..=..=..=..=..=..=..=..=");
         if (raw_voltage * 10 - accumulated_volts <= 50)
           break;
         ++r;
       }
     }
     }
-  }
-  else
-  {
-    if (!is_error)
-    {
-      tft.setCursor(10, 30);
-      tft.setFreeFont(&FreeSans12pt7b);
-      tft.setTextColor(TFT_RED, TFT_BLACK);
-      tft.print("COM Error: ");
-      tft.print(result);
-      tft.setFreeFont(&FreeSans18pt7b);
-      tft.setTextColor(TFT_WHITE, TFT_BLACK);
-      is_error = true;
-    }
-  }
   
-    page = p;
+ 
+
+  page = p;
 }
 
-void animateBattery()
-{
-  if (is_error || !is_charging || page != 1)
-    return;
-  if (millis() - bat_blink >= 1000)
-  {
-    uint32_t color = bat_blink_white ? TFT_BLACK : TFT_WHITE;
-    bat_blink_white = !bat_blink_white;
-    // drawBatterySOC();
-    if (soc <= 25)
-    {
-      tft.fillRect(196, 197, 88, 36, color);
-    }
-    else if (soc <= 50)
-    {
-      tft.fillRect(196, 160, 88, 36, color);
-    }
-    else if (soc <= 75)
-    {
-      tft.fillRect(196, 123, 88, 36, color);
-    }
-    else
-    {
-      tft.fillRect(196, 86, 88, 36, color);
-    }
-    bat_blink = millis();
-  }
-}
+// void animateBattery()
+// {
+//   if (is_error || !is_charging || page != 1)
+//     return;
+//   if (millis() - bat_blink >= 1000)
+//   {
+//     uint32_t color = bat_blink_white ? TFT_BLACK : TFT_WHITE;
+//     bat_blink_white = !bat_blink_white;
+//     // drawBatterySOC();
+//     if (soc <= 25)
+//     {
+//       tft.fillRect(196, 197, 88, 36, color);
+//     }
+//     else if (soc <= 50)
+//     {
+//       tft.fillRect(196, 160, 88, 36, color);
+//     }
+//     else if (soc <= 75)
+//     {
+//       tft.fillRect(196, 123, 88, 36, color);
+//     }
+//     else
+//     {
+//       tft.fillRect(196, 86, 88, 36, color);
+//     }
+//     bat_blink = millis();
+//   }
+// }
 
 void drawBottomNav()
 {
@@ -327,44 +330,10 @@ bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint32_t w, uint32_t h)
 {
   uint16_t px = (p.x * 480) / 4095;
   uint16_t py = (p.y * 320) / 4095;
-  Serial.println("px " + String(px) + " py " + String(py));
   return (px > x && px < x + w && py > y && py < y + h);
 }
 
 
-
-void drawPage(uint8_t p)
-{
-  p = p > MAX_PAGE_NB ? 1 : p;
-  p = p < 1 ? MAX_PAGE_NB : p;
-
-  if (p != page)
-  {
-    clearPage(page);
-  }
-  if (p == 1 && page != 1)
-  {
-    page = 1;
-    drawBattery();
-    drawPage1Info();
-  }
-  if (p == 2 && page != 2)
-  {
-    page = 2;
-
-    uint16_t x = 40, y = 10;
-    for (uint8_t i = 0; i < 4; ++i)
-    {
-      for (uint8_t j = 0; j < 4; ++j)
-      {
-        printString("33.35V", x, y, 135, font_height, TFT_WHITE, &FreeSans12pt7b);
-        x += 110;
-      }
-      x = 40;
-      y += 70;
-    }
-  }
-}
 
 void setup()
 {
@@ -399,12 +368,13 @@ void setup()
   drawBottomNav();
 }
 
+
+
 void loop()
 {
 
-  if (ts.touched())
+  if (ts.touched() && millis() - touch >= 250)
   {
-    Serial.println("touched");
     TS_Point p = ts.getPoint();
     if (touchIn(p, 350, 230, 46, 46))
     {
@@ -416,15 +386,30 @@ void loop()
 
       renderPage(page - 1);
     }
+    touch = millis();
   }
-  animateBattery();
-
-  if (millis() - page1Info >= 500)
-  {
     // getBatteryInfo();
-    renderPage(page);
-    page1Info = millis();
-  }
+    if(millis() - page1Info >= 1000){
+      modbusInfo();
+      renderPage(page);
+      page1Info= millis();
+    }
+    
+  
+
+  // if(millis() - test >= 5000){
+  //     renderPage(p1 ? 1 : 2);
+  //     p1 = !p1 ;
+  //     test = millis();
+  // }
+
+  // if (millis() - page1Info >= 500)
+  // {
+  //   // getBatteryInfo();
+  //   renderPage(page);
+  //   page1Info = millis();
+  // }
+
 }
 
 // #include <Arduino.h>
