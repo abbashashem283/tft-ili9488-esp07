@@ -136,7 +136,8 @@ void arrow_button(uint16_t x,
                   uint16_t y,
                   uint16_t bgColor,
                   uint16_t fgColor,
-                  uint16_t size)
+                  uint16_t size,
+                  bool is_left = false)
 {
   uint16_t r = size;
 
@@ -144,18 +145,32 @@ void arrow_button(uint16_t x,
   tft.fillCircle(x, y, r, bgColor);
 
   // Triangle dimensions
-  uint16_t triWidth  = r * 1.2;  // width slightly larger than radius
-  uint16_t triHeight = r * 1.2;  // height slightly larger than radius
+  uint16_t triWidth  = r * 1.2;
+  uint16_t triHeight = r * 1.2;
 
-  // Calculate triangle points (centered)
-  int16_t x0 = x - triWidth / 2;  // left base
+  // Base (left) of arrow
+  int16_t x0 = x - triWidth / 2;
   int16_t y0 = y - triHeight / 2;
 
+  // Base (left, bottom)
   int16_t x1 = x0;
   int16_t y1 = y + triHeight / 2;
 
-  int16_t x2 = x + triWidth / 2;  // tip
+  // Tip (right)
+  int16_t x2 = x + triWidth / 2;
   int16_t y2 = y;
+
+  // If arrow should point left — flip horizontally
+  if (is_left)
+  {
+    int16_t flipped_x0 = x + triWidth / 2;
+    int16_t flipped_x1 = flipped_x0;
+    int16_t flipped_x2 = x - triWidth / 2;
+
+    x0 = flipped_x0;
+    x1 = flipped_x1;
+    x2 = flipped_x2;
+  }
 
   tft.fillTriangle(x0, y0, x1, y1, x2, y2, fgColor);
 }
@@ -165,8 +180,9 @@ void arrow_button(uint16_t x,
 
 
 
+
 void selector(String options, uint16_t text_x, uint16_t text_y, uint8_t text_width, uint8_t text_height){
-  arrow_button(text_x-35,text_y+20,TFT_GREEN,TFT_BLACK,20);
+  arrow_button(text_x-35,text_y+20,TFT_GREEN,TFT_BLACK,20,true);
   printString(options,text_x,text_y,100,font_height);
   arrow_button(text_x + tft.textWidth(options) + 35,text_y+20,TFT_GREEN,TFT_BLACK,20);
 
