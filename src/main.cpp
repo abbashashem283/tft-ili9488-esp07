@@ -181,11 +181,12 @@ void arrow_button(uint16_t x,
 
 
 
-void selector(String options, uint16_t text_x, uint16_t text_y, uint8_t text_width, uint8_t text_height){
-  arrow_button(text_x-35,text_y+20,TFT_GREEN,TFT_BLACK,20,true);
-  printString(options,text_x,text_y,100,font_height);
-  arrow_button(text_x + tft.textWidth(options) + 35,text_y+20,TFT_GREEN,TFT_BLACK,20);
-
+void selector(String options, uint16_t x, uint16_t y, uint8_t text_width, uint8_t text_height){
+  arrow_button(x, y+20,TFT_GREEN,TFT_BLACK,20,true);
+  uint8_t input_width = tft.textWidth(options);
+  uint8_t remaining_space = text_width - input_width;
+  printString(options,x+remaining_space / 2,y,input_width,font_height);
+  arrow_button(x + text_width,y+20,TFT_GREEN,TFT_BLACK,20);
 }
 
 void clearPage(uint8_t p)
