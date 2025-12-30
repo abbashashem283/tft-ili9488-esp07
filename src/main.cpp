@@ -3,6 +3,7 @@
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
 #include <ModbusMaster.h>
+#include "graphics/Selector.h"
 
 // Pins
 #define CS_PIN 16   // Chip select for XPT2046
@@ -16,6 +17,7 @@
 XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);
 
 TFT_eSPI tft;
+uint16_t sw, sh;
 
 ModbusMaster node;
 bool modbus_busy = false;
@@ -26,6 +28,9 @@ float voltage = 0.0, current = 0.0, watts = 0.0;
 
 uint16_t charge_color = TFT_WHITE;
 
+String baud_rates[] = {"1200","2400","4800","9600", "14400", "19200", "38400", "56000","57600","115200"};
+uint8_t selected_baud = 3;
+
 unsigned long bat_blink = 0;
 unsigned long touch = 0;
 bool bat_blink_white = true;
@@ -35,6 +40,12 @@ unsigned long page1Info = 0;
 bool is_charging = false, is_idle = false, is_discharging = false, is_error = false;
 
 uint8_t nb_of_cells = 0;
+
+
+Selector baudSelector(baud_rates, 10, 240, 10, 200);
+Selector slaveSelector(1, 50, 240, 70, 200);
+Selector cutOffSelector(20, 100, 240, 130, 200);
+Selector turnONSelector(25, 100, 240, 190, 200);
 
 void preTransmission()
 {
@@ -57,10 +68,10 @@ void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, ui
 
   // Explicit font and colors
   sprite.setFreeFont(font); // match whatever you used on tft
-  sprite.setTextColor(fc, TFT_BLACK);
+  sprite.setTextColor(fc , TFT_BLACK);
 
   // Fill background
-  sprite.fillSprite(TFT_BLUE);
+  //sprite.fillSprite(TFT_BLUE);
 
   // Draw text with baseline offset
   sprite.drawString(text, 0, 0);
@@ -132,62 +143,7 @@ uint8_t idealVoltage(float voltage)
   return nominal;
 }
 
-void arrow_button(uint16_t x,
-                  uint16_t y,
-                  uint16_t bgColor,
-                  uint16_t fgColor,
-                  uint16_t size,
-                  bool is_left = false)
-{
-  uint16_t r = size;
 
-  // Draw the circle (background)
-  tft.fillCircle(x, y, r, bgColor);
-
-  // Triangle dimensions
-  uint16_t triWidth  = r * 1.2;
-  uint16_t triHeight = r * 1.2;
-
-  // Base (left) of arrow
-  int16_t x0 = x - triWidth / 2;
-  int16_t y0 = y - triHeight / 2;
-
-  // Base (left, bottom)
-  int16_t x1 = x0;
-  int16_t y1 = y + triHeight / 2;
-
-  // Tip (right)
-  int16_t x2 = x + triWidth / 2;
-  int16_t y2 = y;
-
-  // If arrow should point left — flip horizontally
-  if (is_left)
-  {
-    int16_t flipped_x0 = x + triWidth / 2;
-    int16_t flipped_x1 = flipped_x0;
-    int16_t flipped_x2 = x - triWidth / 2;
-
-    x0 = flipped_x0;
-    x1 = flipped_x1;
-    x2 = flipped_x2;
-  }
-
-  tft.fillTriangle(x0, y0, x1, y1, x2, y2, fgColor);
-}
-
-
-
-
-
-
-
-void selector(String options, uint16_t x, uint16_t y, uint8_t text_width, uint8_t text_height){
-  arrow_button(x, y+20,TFT_GREEN,TFT_BLACK,20,true);
-  uint8_t input_width = tft.textWidth(options);
-  uint8_t remaining_space = text_width - input_width;
-  printString(options,x+remaining_space / 2,y,input_width,font_height);
-  arrow_button(x + text_width,y+20,TFT_GREEN,TFT_BLACK,20);
-}
 
 void clearPage(uint8_t p)
 {
@@ -357,10 +313,14 @@ void renderPage(uint8_t p)
     }
     case 3: {
       if(page == 3) return;
-      printString("Baud",50,50,tft.textWidth("Baud"),font_height,TFT_WHITE);
-      //selector("", 350, 50, 200, font_height);
-      selector("9600", 250, 50, 200, font_height);
-      selector("115200", 250, 200, 200, font_height);
+      printString("Baud",10,10,tft.textWidth("Baud"),font_height,TFT_WHITE);
+      baudSelector.render();
+      printString("SID",10,70,tft.textWidth("SID"),font_height,TFT_WHITE);
+      slaveSelector.render();
+      printString("Cut Off",10,130,tft.textWidth("Cut Off"),font_height,TFT_WHITE);
+      cutOffSelector.render();
+      printString("Turn ON",10,190,tft.textWidth("Turn ON"),font_height,TFT_WHITE);
+      turnONSelector.render();
       break;
     }
   }
@@ -405,11 +365,12 @@ void drawBottomNav()
   tft.fillTriangle(50, 287, 86, 269, 86, 305, TFT_GREEN);
 }
 
-bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint32_t w, uint32_t h)
+bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
-  uint16_t px = (p.x * 480) / 4095;
-  uint16_t py = (p.y * 320) / 4095;
-  return (px > x && px < x + w && py > y && py < y + h);
+  uint16_t px = (p.x * sw) / 4095;
+  uint16_t py = (p.y * sh) / 4095;
+  Serial.println("touch in "+ String(px) + " "+ String(py));
+  return (px >= x && px <= x + w && py >= y && py <= y + h);
 }
 
 
@@ -442,11 +403,20 @@ void setup()
   tft.setFreeFont(&FreeSans18pt7b);
   font_height = tft.fontHeight();
 
-  drawBattery();
-  drawPage1Info();
-  drawBottomNav();
+  sw = tft.width();
+  sh = tft.height();
 
+  
+
+  // drawBattery();
+  // drawPage1Info();
+   drawBottomNav();
+
+  
+  //baudSelector = Selector(baud_rates, 10, 100, 100, 200);
   renderPage(3);
+  //tft.drawRect(270,140,60,60, TFT_CYAN);
+  //tft.drawRect(70,240,60,60, TFT_CYAN);
 }
 
 
@@ -467,12 +437,16 @@ void loop()
 
       renderPage(page - 1);
     }
+    if(page == 3){
+      baudSelector.handleTouch(p);
+      slaveSelector.handleTouch(p);
+    }
     touch = millis();
   }
     // getBatteryInfo();
     if(millis() - page1Info >= 1000){
       //modbusInfo();
-      renderPage(page);
+      //renderPage(page);
       page1Info= millis();
     }
     
