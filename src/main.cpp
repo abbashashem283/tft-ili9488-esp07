@@ -1,9 +1,10 @@
 #include <Arduino.h>
-
+#include <EEPROM.h>
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
 #include <ModbusMaster.h>
 #include "graphics/Selector.h"
+#include "graphics/Button.h"
 
 // Pins
 #define CS_PIN 16   // Chip select for XPT2046
@@ -13,6 +14,8 @@
 #define RE 0
 
 #define MAX_PAGE_NB 3
+#define TOAST_OK 0
+#define TOAST_ERROR 1
 // Touchscreen object
 XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);
 
@@ -28,7 +31,8 @@ float voltage = 0.0, current = 0.0, watts = 0.0;
 
 uint16_t charge_color = TFT_WHITE;
 
-String baud_rates[] = {"1200","2400","4800","9600", "14400", "19200", "38400", "56000","57600","115200"};
+String baud_rates[] = {"AUTO","1200", "2400", "4800", "9600", "14400", "19200", "38400", "56000", "57600", "115200"};
+String com_systems[] = {"FEBS", "PABS"};
 uint8_t selected_baud = 3;
 
 unsigned long bat_blink = 0;
@@ -39,39 +43,40 @@ unsigned long page1Info = 0;
 
 bool is_charging = false, is_idle = false, is_discharging = false, is_error = false;
 
-uint8_t nb_of_cells = 0;
+uint8_t selected_baud_index, selected_system_index, selected_cutoff_value, selected_turnon_value = 0;
 
+Selector baudSelector(baud_rates,0, 10, 240, 20, 200);
+Selector systemSelector(com_systems,0, 2, 240, 80, 200);
+Selector cutOffSelector(5, 100, 5, 240, 140, 200);
+Selector turnONSelector(5, 100, 5, 240, 200, 200);
 
-Selector baudSelector(baud_rates, 10, 240, 10, 200);
-Selector slaveSelector(1, 50, 240, 70, 200);
-Selector cutOffSelector(20, 100, 240, 130, 200);
-Selector turnONSelector(25, 100, 240, 190, 200);
+Button saveButton("Save", TFT_GREEN,100, 50, TFT_BLACK,  true) ;
 
 void preTransmission()
 {
   digitalWrite(DE, HIGH);
   digitalWrite(RE, HIGH);
-  //delayMicroseconds(300);
+  // delayMicroseconds(300);
 }
 
 void postTransmission()
 {
   digitalWrite(DE, LOW);
   digitalWrite(RE, LOW);
-  //delayMicroseconds(300);
+  // delayMicroseconds(300);
 }
 
-void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16 fc = TFT_WHITE, const GFXfont *font = &FreeSans18pt7b)
+void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16 fc = TFT_WHITE, const GFXfont *font = &FreeSans18pt7b,  uint16 bc = TFT_BLACK)
 {
   TFT_eSprite sprite = TFT_eSprite(&tft);
   sprite.createSprite(w, h);
 
   // Explicit font and colors
   sprite.setFreeFont(font); // match whatever you used on tft
-  sprite.setTextColor(fc , TFT_BLACK);
+  sprite.setTextColor(fc, bc);
 
   // Fill background
-  //sprite.fillSprite(TFT_BLUE);
+  // sprite.fillSprite(TFT_BLUE);
 
   // Draw text with baseline offset
   sprite.drawString(text, 0, 0);
@@ -143,8 +148,6 @@ uint8_t idealVoltage(float voltage)
   return nominal;
 }
 
-
-
 void clearPage(uint8_t p)
 {
   switch (p)
@@ -168,23 +171,65 @@ void clearPage(uint8_t p)
     }
     break;
   }
+  case 3:
+  {
+    uint16_t x = 10, y = 20;
+    for (uint16_t i = 0; i < 4; ++i)
+    {
+      tft.fillRect(x, y, 480, font_height, TFT_BLACK);
+      y += 60;
+    }
+    break;
+  }
   default:
     break;
   }
 }
 
-void errorStatChanged(uint8_t result) {
-  if(is_error)
-    printString("COM ERROR: " + String(result), 140, 284, 200, font_height, TFT_RED, &FreeSans12pt7b);
-  else
-    tft.fillRect(140,284,200,font_height,TFT_BLACK);        
+void clearToast(){
+  tft.fillRect(140, 284, 200, font_height, TFT_BLACK);
 }
 
-void modbusInfo(){
-  uint8_t result = node.readHoldingRegisters(0x1300, 74);
-  bool old_error = is_error ;
-  is_error = result != node.ku8MBSuccess ;
-  if(is_error != old_error) errorStatChanged(result);
+void toast(String message, uint8_t mode){
+  uint16_t color = TFT_WHITE;
+  switch(mode){
+    case TOAST_ERROR: {
+      color = TFT_RED;
+      break;
+    }
+    case TOAST_OK:{
+      color = TFT_GREEN;
+      break;
+    }
+  }
+  printString(message, 140, 284, 200, font_height, color, &FreeSans12pt7b);
+}
+
+void errorStatChanged(uint8_t result)
+{
+  if (is_error)
+    toast("E " + String(result), TOAST_ERROR);
+  else
+    clearToast();
+}
+
+void readPerefs(){
+  selected_baud = EEPROM.read(0);
+  selected_system_index = EEPROM.read(1);
+  selected_cutoff_value = EEPROM.read(2);
+  selected_turnon_value = EEPROM.read(3);
+  baudSelector.setCurrentIndex(selected_baud, false);
+   systemSelector.setCurrentIndex(selected_system_index, false);
+   cutOffSelector.setValue(selected_cutoff_value, false);
+   turnONSelector.setValue(selected_turnon_value, false);
+   turnONSelector.setMinValue(selected_cutoff_value + 5);
+}
+
+void writePerefs(){
+  EEPROM.write(0, selected_baud);
+  EEPROM.write(1, selected_system_index);
+  EEPROM.write(2, selected_cutoff_value);
+  EEPROM.write(3, selected_turnon_value);
 }
 
 void renderPage(uint8_t p)
@@ -197,138 +242,160 @@ void renderPage(uint8_t p)
     clearPage(page);
   }
 
-  if(is_error) return ;
-    
-    uint16_t raw_voltage = node.getResponseBuffer(6);
-    switch (p)
+  uint16_t raw_voltage = node.getResponseBuffer(6);
+  switch (p)
+  {
+  case 1:
+  {
+    if (p != page)
     {
-    case 1:
+      drawBattery();
+      drawBatterySOC();
+      drawPage1Info();
+    }
+    float new_voltage = raw_voltage / 100.0f;
+    if (new_voltage != voltage)
     {
-      if (p != page)
+      voltage = new_voltage;
+      printString(String(voltage) + "V", 33, 89, 135, font_height);
+    }
+    uint8_t newSOC = node.getResponseBuffer(11);
+    if (soc != newSOC)
+    {
+      soc = newSOC;
+      printString(String(soc) + "%", 357, 89, 110, font_height);
+      drawBatterySOC();
+    }
+    uint16_t raw_current = node.getResponseBuffer(7);
+    float new_current = 0.0;
+    if (raw_current == 0)
+    {
+      if (!is_idle)
       {
-        drawBattery();
-        drawBatterySOC();
-        drawPage1Info();
+        is_idle = true;
+        batteryChargeModeChanged();
       }
-      float new_voltage = raw_voltage / 100.0f;
-      if(new_voltage != voltage){
-        voltage = new_voltage;
-        printString(String(voltage) + "V", 33, 89, 135, font_height);
-      }
-      uint8_t newSOC = node.getResponseBuffer(11);
-      if (soc != newSOC)
+      is_charging = false;
+      is_discharging = false;
+    }
+    else if (raw_current >= 30000)
+    {
+      if (is_charging == false)
       {
-        soc = newSOC;
-        printString(String(soc) + "%", 357, 89, 110, font_height);
-        drawBatterySOC();
+        is_charging = true;
+        batteryChargeModeChanged();
       }
-      uint16_t raw_current = node.getResponseBuffer(7);
-      float new_current = 0.0;
-      if (raw_current == 0)
-      {
-        if (!is_idle)
-        {
-          is_idle = true;
-          batteryChargeModeChanged();
-        }
-        is_charging = false;
-        is_discharging = false;
-      }
-      else if (raw_current >= 30000)
-      {
-        if (is_charging == false)
-        {
-          is_charging = true;
-          batteryChargeModeChanged();
-        }
 
-        is_idle = false;
-        is_discharging = false;
-        new_current = (65535 - raw_current) / 10.0f;
-      }
-      else
-      {
-        if (is_discharging == false)
-        {
-          is_discharging = true;
-          batteryChargeModeChanged();
-        }
-        is_charging = false;
-        is_idle = false;
-        new_current = raw_current / 10.0f;
-      }
-      if(current != new_current){
-        current = new_current;
-        watts = (current * idealVoltage(voltage)) / 1000.0f;
-        printString(String(watts) + "kW", 33, 191, 135, font_height, charge_color);
-        printString(String(current, 1) + "A", 357, 191, 110, font_height, charge_color);
-      }
-      //drawPage1Info();
-      break;
+      is_idle = false;
+      is_discharging = false;
+      new_current = (65535 - raw_current) / 10.0f;
     }
-    case 2:
+    else
     {
-      uint16_t x = 40, y = 10;
-      uint8_t r = 42;
-      uint16_t accumulated_volts = 0.0;
-      static std::vector<uint16_t> raw_cell_values;
-      // Serial1.print("page = ");
-      // Serial1.print(page);
-      // Serial1.println(" vs " + String(raw_cell_values.size()));
-      if (page != 2)
-        raw_cell_values.clear();
-      if (raw_cell_values.size() >= 100)
-        raw_cell_values.clear();
-      for (uint8_t i = 0; i < 100; ++i)
+      if (is_discharging == false)
       {
-        uint8_t vs = raw_cell_values.size();
-        uint16_t raw_cell_volt = node.getResponseBuffer(r);
-        float cell_volt = raw_cell_volt / 1000.0f;
-        accumulated_volts += raw_cell_volt;
-        if (i >= vs || std::abs(raw_cell_values.at(i) - raw_cell_volt) >= 20)
-        {
-          //Serial1.println(cell_volt);
-          printString(String(cell_volt, 2), x, y, 55, font_height, TFT_WHITE, &FreeSans12pt7b);
-          if (i < vs)
-            raw_cell_values[i] = raw_cell_volt;
-          else
-            raw_cell_values.push_back(raw_cell_volt);
-        }
-        x += 110;
-        if ((i + 1) % 4 == 0)
-        {
-          x = 40;
-          y += 70;
-        }
-        // Serial1.print("av ");
-        // Serial1.print(accumulated_volts);
-        // Serial1.print(" v ");
-        // Serial1.print(raw_voltage);
-        // Serial1.println("=..=..=..=..=..=..=..=..=");
-        if (raw_voltage * 10 - accumulated_volts <= 50)
-          break;
-        ++r;
+        is_discharging = true;
+        batteryChargeModeChanged();
       }
-      break;
+      is_charging = false;
+      is_idle = false;
+      new_current = raw_current / 10.0f;
     }
-    case 3: {
-      if(page == 3) return;
-      printString("Baud",10,10,tft.textWidth("Baud"),font_height,TFT_WHITE);
-      baudSelector.render();
-      printString("SID",10,70,tft.textWidth("SID"),font_height,TFT_WHITE);
-      slaveSelector.render();
-      printString("Cut Off",10,130,tft.textWidth("Cut Off"),font_height,TFT_WHITE);
-      cutOffSelector.render();
-      printString("Turn ON",10,190,tft.textWidth("Turn ON"),font_height,TFT_WHITE);
-      turnONSelector.render();
-      break;
+    if (current != new_current)
+    {
+      current = new_current;
+      watts = (current * idealVoltage(voltage)) / 1000.0f;
+      printString(String(watts) + "kW", 33, 191, 135, font_height, charge_color);
+      printString(String(current, 1) + "A", 357, 191, 110, font_height, charge_color);
     }
+    // drawPage1Info();
+    break;
   }
-  
- 
+  case 2:
+  {
+    uint16_t x = 40, y = 10;
+    uint8_t r = 42;
+    uint16_t accumulated_volts = 0.0;
+    static std::vector<uint16_t> raw_cell_values;
+    // Serial1.print("page = ");
+    // Serial1.print(page);
+    // Serial1.println(" vs " + String(raw_cell_values.size()));
+    if (page != 2)
+      raw_cell_values.clear();
+    if (raw_cell_values.size() >= 100)
+      raw_cell_values.clear();
+    for (uint8_t i = 0; i < 100; ++i)
+    {
+      uint8_t vs = raw_cell_values.size();
+      uint16_t raw_cell_volt = node.getResponseBuffer(r);
+      float cell_volt = raw_cell_volt / 1000.0f;
+      accumulated_volts += raw_cell_volt;
+      if (i >= vs || std::abs(raw_cell_values.at(i) - raw_cell_volt) >= 20)
+      {
+        // Serial1.println(cell_volt);
+        printString(String(cell_volt, 2), x, y, 55, font_height, TFT_WHITE, &FreeSans12pt7b);
+        if (i < vs)
+          raw_cell_values[i] = raw_cell_volt;
+        else
+          raw_cell_values.push_back(raw_cell_volt);
+      }
+      x += 110;
+      if ((i + 1) % 4 == 0)
+      {
+        x = 40;
+        y += 70;
+      }
+      // Serial1.print("av ");
+      // Serial1.print(accumulated_volts);
+      // Serial1.print(" v ");
+      // Serial1.print(raw_voltage);
+      // Serial1.println("=..=..=..=..=..=..=..=..=");
+      if (raw_voltage * 10 - accumulated_volts <= 50)
+        break;
+      ++r;
+    }
+    break;
+  }
+  case 3:
+  {
+    if (page == 3)
+      return;
+    readPerefs();
+    clearToast();
+    printString("Baud", 10, 20, tft.textWidth("Baud"), font_height, TFT_WHITE);
+    baudSelector.render();
+    printString("System", 10, 80, tft.textWidth("System"), font_height, TFT_WHITE);
+    systemSelector.render();
+    printString("Cut Off", 10, 140, tft.textWidth("Cut Off"), font_height, TFT_WHITE);
+    cutOffSelector.render();
+    printString("Turn ON", 10, 200, tft.textWidth("Turn ON"), font_height, TFT_WHITE);
+    turnONSelector.render();
+    saveButton.render(200,274);
+    break;
+  }
+  }
 
   page = p;
 }
+
+void modbusInfo()
+{
+  if(page == 3) return;
+  static uint8_t attempts = 0;
+  uint8_t result = node.readHoldingRegisters(0x1300, 74);
+  bool old_error = is_error;
+  is_error = result != node.ku8MBSuccess;
+  if(is_error)
+    attempts++;
+  else
+    attempts=0; 
+  if(attempts >= 3)
+    renderPage(3);   
+  if (is_error != old_error)
+    errorStatChanged(result);
+}
+
+
 
 // void animateBattery()
 // {
@@ -369,7 +436,7 @@ bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
   uint16_t px = (p.x * sw) / 4095;
   uint16_t py = (p.y * sh) / 4095;
-  Serial.println("touch in "+ String(px) + " "+ String(py));
+  Serial.println("touch in " + String(px) + " " + String(py));
   return (px >= x && px <= x + w && py >= y && py <= y + h);
 }
 
@@ -384,6 +451,12 @@ void setup()
 
   Serial.begin(9600); // Debugging
   Serial1.begin(115200);
+  EEPROM.begin(1024);
+  // EEPROM.write(0,0);
+  // EEPROM.write(1,0);
+  // EEPROM.write(2,20);
+  // EEPROM.write(3,25);
+  // EEPROM.commit();
   // rs485.begin(9600);      // RS485 baud rate (SoftwareSerial is 8N1 only)
 
   // Initialize Modbus communication
@@ -402,24 +475,47 @@ void setup()
   tft.setTextSize(1);
   tft.setFreeFont(&FreeSans18pt7b);
   font_height = tft.fontHeight();
+  readPerefs();
+  baudSelector.setOnChange(
+    [](uint8_t newVal){
+      Serial.println("baud to " + String(newVal));
+      selected_baud_index = newVal;
+    }
+   );
+   systemSelector.setOnChange(
+    [](uint8_t newVal){
+      Serial.println("system to " + String(newVal));
 
+      selected_system_index = newVal;
+    }
+   );
+   cutOffSelector.setOnChange(
+    [](uint8_t newVal){
+      Serial.println("cut off to " + String(newVal));
+
+      selected_cutoff_value = newVal;
+    }
+   );
+   turnONSelector.setOnChange(
+    [](uint8_t newVal){
+      Serial.println("turn on to " + String(newVal));
+
+      selected_turnon_value = newVal;
+    }
+   );
   sw = tft.width();
   sh = tft.height();
 
-  
 
   // drawBattery();
   // drawPage1Info();
-   drawBottomNav();
+  drawBottomNav();
 
-  
-  //baudSelector = Selector(baud_rates, 10, 100, 100, 200);
+  // baudSelector = Selector(baud_rates, 10, 100, 100, 200);
   renderPage(3);
-  //tft.drawRect(270,140,60,60, TFT_CYAN);
-  //tft.drawRect(70,240,60,60, TFT_CYAN);
+  // tft.drawRect(270,140,60,60, TFT_CYAN);
+  // tft.drawRect(70,240,60,60, TFT_CYAN);
 }
-
-
 
 void loop()
 {
@@ -437,20 +533,22 @@ void loop()
 
       renderPage(page - 1);
     }
-    if(page == 3){
+    if (page == 3)
+    {
       baudSelector.handleTouch(p);
-      slaveSelector.handleTouch(p);
+      systemSelector.handleTouch(p);
+      cutOffSelector.handleTouch(p);
+      turnONSelector.handleTouch(p);
     }
     touch = millis();
   }
-    // getBatteryInfo();
-    if(millis() - page1Info >= 1000){
-      //modbusInfo();
-      //renderPage(page);
-      page1Info= millis();
-    }
-    
-  
+  // getBatteryInfo();
+  if (millis() - page1Info >= 1000)
+  {
+    modbusInfo();
+    // renderPage(page);
+    page1Info = millis();
+  }
 
   // if(millis() - test >= 5000){
   //     renderPage(p1 ? 1 : 2);
@@ -464,7 +562,6 @@ void loop()
   //   renderPage(page);
   //   page1Info = millis();
   // }
-
 }
 
 // #include <Arduino.h>

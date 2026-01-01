@@ -8,10 +8,10 @@
 class Selector {
 public:
   // Constructor
-  Selector(String opts[], uint8_t count,
+  Selector(String opts[],int8_t current, uint8_t count,
            uint16_t x, uint16_t y, uint16_t tw);
 
-  Selector(uint8_t counter, uint8_t count,
+  Selector(uint8_t minV,uint8_t maxV, int8_t val,
            uint16_t x, uint16_t y, uint16_t tw);
 
   // Draw the selector box, arrows, and current option
@@ -20,9 +20,9 @@ public:
   // Handle touch input at (px, py)
   void handleTouch(TS_Point p);
 
-  void setCurrentIndex(int8_t current) ;
+  void setCurrentIndex(int8_t current, bool render_value=true ) ;
 
-  void setValue(int8_t value);
+  void setValue(int8_t value, bool render_value=true );
 
   // Register a callback to be called when selection changes
   void setOnChange(void (*callback)(uint8_t));
@@ -30,13 +30,18 @@ public:
   // Get the currently selected option index
   uint8_t getIndex();
 
+  void setMinValue(uint8_t value);
+
 
 private:
   // Options data
   String* options;
   int8_t value;        // pointer to array of option strings
   uint8_t optionCount;    // number of options
-  int8_t currentIndex;   // currently selected index
+  int8_t currentIndex;
+  uint8_t minValue;
+  uint8_t maxValue;
+  int8_t currentValue;   // currently selected index
 
 
   // Position and dimensions

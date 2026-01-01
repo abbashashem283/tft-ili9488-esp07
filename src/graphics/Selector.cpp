@@ -2,7 +2,7 @@
 #include <TFT_eSPI.h>
 
 extern TFT_eSPI tft;
-extern void printString(String text, uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t fc, const GFXfont *font);
+extern void printString(String text, uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t fc, const GFXfont *font, uint16_t bc);
 extern bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 
 void arrow_button(uint16_t x,
@@ -48,19 +48,31 @@ void arrow_button(uint16_t x,
     tft.fillTriangle(x0, y0, x1, y1, x2, y2, fgColor);
 }
 
-Selector::Selector(String opts[], uint8_t count, uint16_t x, uint16_t y, uint16_t tw) : options(opts), optionCount(count), currentIndex(0), posX(x), posY(y), font_height(30), text_width(tw) {
+Selector::Selector(String opts[],int8_t current, uint8_t count, uint16_t x, uint16_t y, uint16_t tw) : 
+options(opts), 
+optionCount(count), 
+currentIndex(current), 
+posX(x), 
+posY(y), 
+font_height(30), 
+text_width(tw),
+onChange(nullptr) {
     
 }
 
-Selector::Selector(uint8_t counter, uint8_t limit, uint16_t x, uint16_t y, uint16_t tw) : value(counter),
-                                                                                          optionCount(limit),
-                                                                                          currentIndex(-1),
-                                                                                          posX(x),
-                                                                                          posY(y),
-                                                                                          font_height(30),
-                                                                                          text_width(tw) {
+Selector::Selector(uint8_t minV, uint8_t maxV, int8_t val, uint16_t x, uint16_t y, uint16_t tw) : 
+minValue(minV),
+maxValue(maxV),
+optionCount(0),
+currentValue(val),
+currentIndex(-1),
+posX(x),
+posY(y),
+font_height(30),
+text_width(tw),
+onChange(nullptr) {
                                                                                            
-                                                                                          }
+}
 
 void Selector::displayText(String text)
 {
@@ -68,21 +80,28 @@ void Selector::displayText(String text)
     uint8_t remaining_space = text_width - input_width;
     tft.fillRect(posX + 20, posY, text_width - 40, font_height, TFT_BLACK);
 
-    printString(text, posX + remaining_space / 2, posY, input_width, font_height, TFT_WHITE, &FreeSans18pt7b);
+    printString(text, posX + remaining_space / 2, posY, input_width, font_height, TFT_WHITE, &FreeSans18pt7b, TFT_BLACK);
 }
 
-void Selector::setValue(int8_t val)
+void Selector::setMinValue(uint8_t value){
+    minValue = value;
+}
+
+void Selector::setValue(int8_t val, bool render_value )
 {
-    value = val;
-    if(val < 0)
-        value = optionCount;
-    else if(val > optionCount)
-        value = 0;    
-    Serial.println("value is "+String(value));
-    displayText(String(value));
+    currentValue = val;   
+    if(val < minValue)
+        currentValue = maxValue;
+    else if(val > maxValue)
+        currentValue = minValue;    
+    Serial.println("value is "+String(currentValue));
+    if(render_value)
+        displayText(String(currentValue));
+    if(onChange)    
+     onChange(currentValue);    
 }
 
-void Selector::setCurrentIndex(int8_t index)
+void Selector::setCurrentIndex(int8_t index, bool render_value)
 {
     Serial.println("index: " + String(index) + " currentIndex: " + String(currentIndex));
     currentIndex = index;
@@ -91,7 +110,10 @@ void Selector::setCurrentIndex(int8_t index)
     else if (currentIndex >= optionCount)
         currentIndex = 0;
     String selected_text = options[currentIndex];
-    displayText(selected_text);
+    if(render_value)
+        displayText(selected_text);
+    if(onChange)    
+     onChange(currentIndex);    
 }
 
 void Selector::render()
@@ -103,17 +125,21 @@ void Selector::render()
     arrow_button(lx, ly, TFT_GREEN, TFT_BLACK, 20, true);
     String option;
     if (currentIndex == -1)
-        option = String(value);
+        option = String(currentValue);
     else
         option = options[currentIndex];
     Serial.println("val is " + String(value) + " and currentIndex is " + String(currentIndex));
     uint8_t input_width = tft.textWidth(option);
     uint8_t remaining_space = text_width - input_width;
-    printString(option, posX + remaining_space / 2, posY, input_width, font_height, TFT_WHITE, &FreeSans18pt7b);
+    printString(option, posX + remaining_space / 2, posY, input_width, font_height, TFT_WHITE, &FreeSans18pt7b, TFT_BLACK);
     uint16_t rx = posX + text_width;
     uint16_t ry = posY + 20;
     // if(!is_rendered)
     arrow_button(rx, ry, TFT_GREEN, TFT_BLACK, 20);
+}
+
+void Selector::setOnChange(void (*callback)(uint8_t)){
+    onChange =callback ;
 }
 
 void Selector::handleTouch(TS_Point p)
@@ -126,13 +152,13 @@ void Selector::handleTouch(TS_Point p)
     if (touchIn(p, lx - 30, ly - 30, 60, 60))
     {
         if(currentIndex == -1)
-            this->setValue(value - 1);
+            this->setValue(currentValue - 1);
         else
             this->setCurrentIndex(currentIndex - 1);
     }
     if (touchIn(p, rx - 30, ry - 30, 60, 60)){
         if(currentIndex == -1)
-            this->setValue(value + 1);
+            this->setValue(currentValue + 1);
         else
             this->setCurrentIndex(currentIndex + 1);
     }
