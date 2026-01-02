@@ -16,6 +16,8 @@
 #define MAX_PAGE_NB 3
 #define TOAST_OK 0
 #define TOAST_ERROR 1
+
+#define MAX_SLAVE_NB 15
 // Touchscreen object
 XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);
 
@@ -23,6 +25,7 @@ TFT_eSPI tft;
 uint16_t sw, sh;
 
 ModbusMaster node;
+uint8_t selected_slave = 1;
 bool com_test = false;
 uint8_t page = 1;
 uint8_t soc = 0;
@@ -31,11 +34,11 @@ float voltage = 0.0, current = 0.0, watts = 0.0;
 
 uint16_t charge_color = TFT_WHITE;
 
-String baud_rates[] = {"AUTO","1200", "2400", "4800", "9600", "14400", "19200", "38400", "56000", "57600", "115200"};
+String baud_rates[] = {"AUTO", "1200", "2400", "4800", "9600", "14400", "19200", "38400", "56000", "57600", "115200"};
 String com_systems[] = {"FEBS", "PABS"};
 uint8_t selected_baud = 3;
 
-//unsigned long bat_blink = 0;
+// unsigned long bat_blink = 0;
 unsigned long settings_timer = 0;
 unsigned long touch = 0;
 bool bat_blink_white = true;
@@ -46,12 +49,12 @@ bool is_charging = false, is_idle = false, is_discharging = false, is_error = fa
 
 uint8_t selected_baud_index, selected_system_index, selected_cutoff_value, selected_turnon_value = 0;
 
-Selector baudSelector(baud_rates,0, 10, 240, 20, 200);
-Selector systemSelector(com_systems,0, 2, 240, 80, 200);
+Selector baudSelector(baud_rates, 0, 10, 240, 20, 200);
+Selector systemSelector(com_systems, 0, 2, 240, 80, 200);
 Selector cutOffSelector(5, 100, 5, 240, 140, 200);
 Selector turnONSelector(5, 100, 5, 240, 200, 200);
 
-Button comButton("COM", TFT_GREEN,100, 50, TFT_BLACK,  true) ;
+Button comButton("COM", TFT_GREEN, 100, 50, TFT_BLACK, true);
 
 bool settings_changed = false;
 
@@ -69,7 +72,7 @@ void postTransmission()
   // delayMicroseconds(300);
 }
 
-void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16 fc = TFT_WHITE, const GFXfont *font = &FreeSans18pt7b,  uint16 bc = TFT_BLACK)
+void printString(String text, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16 fc = TFT_WHITE, const GFXfont *font = &FreeSans18pt7b, uint16 bc = TFT_BLACK)
 {
   TFT_eSprite sprite = TFT_eSprite(&tft);
   sprite.createSprite(w, h);
@@ -182,8 +185,9 @@ void clearPage(uint8_t p)
       tft.fillRect(x, y, 480, font_height, TFT_BLACK);
       y += 60;
     }
-    tft.fillRect(130,264,100,50, TFT_BLACK);
-    tft.drawRoundRect(250, 264,100,50,12,TFT_BLACK);
+    tft.fillRect(130, 264, 100, 50, TFT_BLACK);
+    tft.drawRoundRect(250, 264, 100, 50, 12, TFT_BLACK);
+    // settingsText("Hi");
     break;
   }
   default:
@@ -191,38 +195,46 @@ void clearPage(uint8_t p)
   }
 }
 
-void clearToast(){
+void clearToast()
+{
   tft.fillRect(140, 284, 200, font_height, TFT_BLACK);
 }
 
-void toast(String message, uint8_t mode){
+void toast(String message, uint8_t mode)
+{
   uint16_t color = TFT_WHITE;
-  switch(mode){
-    case TOAST_ERROR: {
-      color = TFT_RED;
-      break;
-    }
-    case TOAST_OK:{
-      color = TFT_GREEN;
-      break;
-    }
+  switch (mode)
+  {
+  case TOAST_ERROR:
+  {
+    color = TFT_RED;
+    break;
+  }
+  case TOAST_OK:
+  {
+    color = TFT_GREEN;
+    break;
+  }
   }
   printString(message, 140, 284, 200, font_height, color, &FreeSans12pt7b);
 }
 
-void settingsText(String text , bool clear = false){
-  if(clear){
-    tft.fillRect(260,270,95,45,TFT_BLACK);
+void settingsText(String text, uint16_t fc = TFT_YELLOW, bool clear = false)
+{
+  if (clear)
+  {
+    tft.fillRect(260, 270, 87, 40, TFT_BLACK);
     return;
   }
+  tft.fillRect(260, 270, 87, 40, TFT_BLACK);
+
   tft.setFreeFont(&FreeSans12pt7b);
   uint16_t fh = tft.fontHeight() - 10;
-  uint16_t w = 100;
   uint16_t rs_x = 100 - tft.textWidth(text);
   uint16_t rs_y = 50 - fh;
   float padding_x = rs_x / 2;
   float padding_y = rs_y / 2;
-  printString(text, 250+rs_x, 264+rs_y, tft.textWidth(text), fh); 
+  printString(text, 250 + padding_x, 264 + padding_y, tft.textWidth(text) + 10, fh, fc, &FreeMono12pt7b, TFT_BLACK);
   tft.setFreeFont(&FreeSans18pt7b);
 }
 
@@ -234,23 +246,26 @@ void errorStatChanged(uint8_t result)
     clearToast();
 }
 
-void readPerefs(){
+void readPerefs()
+{
   selected_baud = EEPROM.read(0);
   selected_system_index = EEPROM.read(1);
   selected_cutoff_value = EEPROM.read(2);
   selected_turnon_value = EEPROM.read(3);
   baudSelector.setCurrentIndex(selected_baud, false);
-   systemSelector.setCurrentIndex(selected_system_index, false);
-   cutOffSelector.setValue(selected_cutoff_value, false);
-   turnONSelector.setValue(selected_turnon_value, false);
-   turnONSelector.setMinValue(selected_cutoff_value + 5);
+  systemSelector.setCurrentIndex(selected_system_index, false);
+  cutOffSelector.setValue(selected_cutoff_value, false);
+  turnONSelector.setValue(selected_turnon_value, false);
+  turnONSelector.setMinValue(selected_cutoff_value + 5);
 }
 
-void writePerefs(){
+void writePerefs()
+{
   EEPROM.write(0, selected_baud);
   EEPROM.write(1, selected_system_index);
   EEPROM.write(2, selected_cutoff_value);
   EEPROM.write(3, selected_turnon_value);
+  Serial.println("Writing prefs to eeprom");
   EEPROM.commit();
 }
 
@@ -392,8 +407,8 @@ void renderPage(uint8_t p)
     cutOffSelector.render();
     printString("Turn ON", 10, 200, tft.textWidth("Turn ON"), font_height, TFT_WHITE);
     turnONSelector.render();
-    comButton.render(130,264);
-    tft.drawRoundRect(250, 264,100,50,12,TFT_YELLOW);
+    comButton.render(130, 264);
+    tft.drawRoundRect(250, 264, 100, 50, 12, TFT_YELLOW);
     break;
   }
   }
@@ -403,26 +418,51 @@ void renderPage(uint8_t p)
 
 void modbusInfo()
 {
-  if(page == 3) return;
+  if (page == 3)
+    return;
   static uint8_t attempts = 0;
   uint8_t result = node.readHoldingRegisters(0x1300, 74);
   bool old_error = is_error;
   is_error = result != node.ku8MBSuccess;
-  if(is_error)
+  if (is_error)
     attempts++;
   else
-    attempts=0; 
-  if(attempts >= 3)
-    renderPage(3);   
+    attempts = 0;
+  if (attempts >= 3)
+    renderPage(3);
   if (is_error != old_error)
     errorStatChanged(result);
 }
 
-void comTest(){
-  
+void comTest()
+{
+  if (selected_baud == 0)
+  {
+    for (uint8_t i = 1; i < 11; ++i)
+    {
+      uint32_t baud = baud_rates[i].toInt();
+      Serial.end();
+      Serial.begin(baud);
+      delay(200);
+      for (uint8_t j = 1; j <= MAX_SLAVE_NB; ++j)
+      {
+        settingsText("S-" + String(j));
+        node.begin(j, Serial);
+        uint8_t result = node.readHoldingRegisters(0x1300, 1);
+        if (result == node.ku8MBSuccess)
+        {
+          selected_slave = j;
+          baudSelector.setCurrentIndex(i);
+          settingsText("PASS", TFT_GREEN);
+          com_test = false;
+          return;
+        }
+      }
+    }
+    settingsText("FAIL", TFT_RED);
+    com_test = false;
+  }
 }
-
-
 
 // void animateBattery()
 // {
@@ -467,8 +507,6 @@ bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
   return (px >= x && px <= x + w && py >= y && py <= y + h);
 }
 
-
-
 void setup()
 {
   pinMode(DE, OUTPUT);
@@ -487,7 +525,7 @@ void setup()
   // rs485.begin(9600);      // RS485 baud rate (SoftwareSerial is 8N1 only)
 
   // Initialize Modbus communication
-  node.begin(1, Serial); // Slave ID = 1
+  node.begin(selected_slave, Serial); // Slave ID = 1
   node.preTransmission(preTransmission);
   node.postTransmission(postTransmission);
   delay(3000);
@@ -504,45 +542,49 @@ void setup()
   font_height = tft.fontHeight();
   readPerefs();
   baudSelector.setOnChange(
-    [](uint8_t newVal){
-      Serial.println("baud to " + String(newVal));
-      selected_baud_index = newVal;
-      settings_changed = true;
-    }
-   );
-   systemSelector.setOnChange(
-    [](uint8_t newVal){
-      Serial.println("system to " + String(newVal));
+      [](uint8_t newVal)
+      {
+        Serial.println("baud to " + String(newVal));
+        selected_baud_index = newVal;
+        settings_changed = true;
+        settings_timer = millis();
+      });
+  systemSelector.setOnChange(
+      [](uint8_t newVal)
+      {
+        Serial.println("system to " + String(newVal));
 
-      selected_system_index = newVal;
-      settings_changed = true;
-    }
-   );
-   cutOffSelector.setOnChange(
-    [](uint8_t newVal){
-      Serial.println("cut off to " + String(newVal));
+        selected_system_index = newVal;
+        settings_changed = true;
+        settings_timer = millis();
+      });
+  cutOffSelector.setOnChange(
+      [](uint8_t newVal)
+      {
+        Serial.println("cut off to " + String(newVal));
 
-      selected_cutoff_value = newVal;
-      turnONSelector.setMinValue(newVal + 5);
-      settings_changed = true;
-    }
-   );
-   turnONSelector.setOnChange(
-    [](uint8_t newVal){
-      Serial.println("turn on to " + String(newVal));
+        selected_cutoff_value = newVal;
+        turnONSelector.setMinValue(newVal + 5);
+        settings_changed = true;
+        settings_timer = millis();
+      });
+  turnONSelector.setOnChange(
+      [](uint8_t newVal)
+      {
+        Serial.println("turn on to " + String(newVal));
 
-      selected_turnon_value = newVal;
-      settings_changed = true;
-    }
-   );
-   comButton.setOnClick(
-    [](){
-      com_test = true;
-    }
-   );
+        selected_turnon_value = newVal;
+        settings_changed = true;
+        settings_timer = millis();
+      });
+  comButton.setOnClick(
+      []()
+      {
+        com_test = true;
+        comTest();
+      });
   sw = tft.width();
   sh = tft.height();
-
 
   // drawBattery();
   // drawPage1Info();
@@ -556,7 +598,8 @@ void setup()
 
 void loop()
 {
-  if(com_test){
+  if (com_test)
+  {
 
     return;
   }
@@ -580,15 +623,17 @@ void loop()
       cutOffSelector.handleTouch(p);
       turnONSelector.handleTouch(p);
       comButton.clickListener(p);
+    }
+    touch = millis();
+  }
 
-      if(settings_changed && millis() - settings_timer >= 60000){
+
+   if (settings_changed && millis() - settings_timer >= 60000)
+      {
         writePerefs();
         settings_changed = false;
         settings_timer = millis();
       }
-    }
-    touch = millis();
-  }
   // getBatteryInfo();
   if (millis() - page1Info >= 1000)
   {
