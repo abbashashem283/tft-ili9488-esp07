@@ -85,6 +85,8 @@ void Selector::displayText(String text)
 
 void Selector::setMinValue(uint8_t value){
     minValue = value;
+    if(currentValue < value)
+        setValue(value);
 }
 
 void Selector::setValue(int8_t val, bool render_value )
@@ -99,6 +101,10 @@ void Selector::setValue(int8_t val, bool render_value )
         displayText(String(currentValue));
     if(onChange)    
      onChange(currentValue);    
+}
+
+uint8_t Selector::getValue() {
+    return currentValue;
 }
 
 void Selector::setCurrentIndex(int8_t index, bool render_value)

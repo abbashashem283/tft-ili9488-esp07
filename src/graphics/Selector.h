@@ -24,6 +24,8 @@ public:
 
   void setValue(int8_t value, bool render_value=true );
 
+  uint8_t getValue();
+
   // Register a callback to be called when selection changes
   void setOnChange(void (*callback)(uint8_t));
 

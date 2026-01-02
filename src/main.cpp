@@ -23,7 +23,7 @@ TFT_eSPI tft;
 uint16_t sw, sh;
 
 ModbusMaster node;
-bool modbus_busy = false;
+bool com_test = false;
 uint8_t page = 1;
 uint8_t soc = 0;
 uint8_t font_height = 0;
@@ -35,7 +35,8 @@ String baud_rates[] = {"AUTO","1200", "2400", "4800", "9600", "14400", "19200", 
 String com_systems[] = {"FEBS", "PABS"};
 uint8_t selected_baud = 3;
 
-unsigned long bat_blink = 0;
+//unsigned long bat_blink = 0;
+unsigned long settings_timer = 0;
 unsigned long touch = 0;
 bool bat_blink_white = true;
 
@@ -50,7 +51,9 @@ Selector systemSelector(com_systems,0, 2, 240, 80, 200);
 Selector cutOffSelector(5, 100, 5, 240, 140, 200);
 Selector turnONSelector(5, 100, 5, 240, 200, 200);
 
-Button saveButton("Save", TFT_GREEN,100, 50, TFT_BLACK,  true) ;
+Button comButton("COM", TFT_GREEN,100, 50, TFT_BLACK,  true) ;
+
+bool settings_changed = false;
 
 void preTransmission()
 {
@@ -179,6 +182,8 @@ void clearPage(uint8_t p)
       tft.fillRect(x, y, 480, font_height, TFT_BLACK);
       y += 60;
     }
+    tft.fillRect(130,264,100,50, TFT_BLACK);
+    tft.drawRoundRect(250, 264,100,50,12,TFT_BLACK);
     break;
   }
   default:
@@ -203,6 +208,22 @@ void toast(String message, uint8_t mode){
     }
   }
   printString(message, 140, 284, 200, font_height, color, &FreeSans12pt7b);
+}
+
+void settingsText(String text , bool clear = false){
+  if(clear){
+    tft.fillRect(260,270,95,45,TFT_BLACK);
+    return;
+  }
+  tft.setFreeFont(&FreeSans12pt7b);
+  uint16_t fh = tft.fontHeight() - 10;
+  uint16_t w = 100;
+  uint16_t rs_x = 100 - tft.textWidth(text);
+  uint16_t rs_y = 50 - fh;
+  float padding_x = rs_x / 2;
+  float padding_y = rs_y / 2;
+  printString(text, 250+rs_x, 264+rs_y, tft.textWidth(text), fh); 
+  tft.setFreeFont(&FreeSans18pt7b);
 }
 
 void errorStatChanged(uint8_t result)
@@ -230,6 +251,7 @@ void writePerefs(){
   EEPROM.write(1, selected_system_index);
   EEPROM.write(2, selected_cutoff_value);
   EEPROM.write(3, selected_turnon_value);
+  EEPROM.commit();
 }
 
 void renderPage(uint8_t p)
@@ -370,7 +392,8 @@ void renderPage(uint8_t p)
     cutOffSelector.render();
     printString("Turn ON", 10, 200, tft.textWidth("Turn ON"), font_height, TFT_WHITE);
     turnONSelector.render();
-    saveButton.render(200,274);
+    comButton.render(130,264);
+    tft.drawRoundRect(250, 264,100,50,12,TFT_YELLOW);
     break;
   }
   }
@@ -393,6 +416,10 @@ void modbusInfo()
     renderPage(3);   
   if (is_error != old_error)
     errorStatChanged(result);
+}
+
+void comTest(){
+  
 }
 
 
@@ -480,6 +507,7 @@ void setup()
     [](uint8_t newVal){
       Serial.println("baud to " + String(newVal));
       selected_baud_index = newVal;
+      settings_changed = true;
     }
    );
    systemSelector.setOnChange(
@@ -487,6 +515,7 @@ void setup()
       Serial.println("system to " + String(newVal));
 
       selected_system_index = newVal;
+      settings_changed = true;
     }
    );
    cutOffSelector.setOnChange(
@@ -494,6 +523,8 @@ void setup()
       Serial.println("cut off to " + String(newVal));
 
       selected_cutoff_value = newVal;
+      turnONSelector.setMinValue(newVal + 5);
+      settings_changed = true;
     }
    );
    turnONSelector.setOnChange(
@@ -501,6 +532,12 @@ void setup()
       Serial.println("turn on to " + String(newVal));
 
       selected_turnon_value = newVal;
+      settings_changed = true;
+    }
+   );
+   comButton.setOnClick(
+    [](){
+      com_test = true;
     }
    );
   sw = tft.width();
@@ -519,7 +556,10 @@ void setup()
 
 void loop()
 {
+  if(com_test){
 
+    return;
+  }
   if (ts.touched() && millis() - touch >= 250)
   {
     TS_Point p = ts.getPoint();
@@ -539,6 +579,13 @@ void loop()
       systemSelector.handleTouch(p);
       cutOffSelector.handleTouch(p);
       turnONSelector.handleTouch(p);
+      comButton.clickListener(p);
+
+      if(settings_changed && millis() - settings_timer >= 60000){
+        writePerefs();
+        settings_changed = false;
+        settings_timer = millis();
+      }
     }
     touch = millis();
   }
