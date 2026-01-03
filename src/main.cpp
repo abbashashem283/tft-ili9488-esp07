@@ -24,6 +24,8 @@ XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);
 TFT_eSPI tft;
 uint16_t sw, sh;
 
+bool first_run = true;
+
 ModbusMaster node;
 uint8_t selected_slave = 1;
 bool com_test = false;
@@ -36,7 +38,7 @@ uint16_t charge_color = TFT_WHITE;
 
 String baud_rates[] = {"AUTO", "1200", "2400", "4800", "9600", "14400", "19200", "38400", "56000", "57600", "115200"};
 String com_systems[] = {"FEBS", "PABS"};
-uint8_t selected_baud = 3;
+
 
 // unsigned long bat_blink = 0;
 unsigned long settings_timer = 0;
@@ -183,10 +185,11 @@ void clearPage(uint8_t p)
     for (uint16_t i = 0; i < 4; ++i)
     {
       tft.fillRect(x, y, 480, font_height, TFT_BLACK);
+      yield();
       y += 60;
     }
     tft.fillRect(130, 264, 100, 50, TFT_BLACK);
-    tft.drawRoundRect(250, 264, 100, 50, 12, TFT_BLACK);
+    tft.fillRoundRect(250, 264, 100, 50, 12, TFT_BLACK);
     // settingsText("Hi");
     break;
   }
@@ -248,11 +251,13 @@ void errorStatChanged(uint8_t result)
 
 void readPerefs()
 {
-  selected_baud = EEPROM.read(0);
+  selected_baud_index= EEPROM.read(0);
   selected_system_index = EEPROM.read(1);
   selected_cutoff_value = EEPROM.read(2);
   selected_turnon_value = EEPROM.read(3);
-  baudSelector.setCurrentIndex(selected_baud, false);
+  selected_slave = EEPROM.read(4);
+  first_run = EEPROM.read(5);
+  baudSelector.setCurrentIndex(selected_baud_index, false);
   systemSelector.setCurrentIndex(selected_system_index, false);
   cutOffSelector.setValue(selected_cutoff_value, false);
   turnONSelector.setValue(selected_turnon_value, false);
@@ -261,11 +266,13 @@ void readPerefs()
 
 void writePerefs()
 {
-  EEPROM.write(0, selected_baud);
+  EEPROM.write(0, selected_baud_index);
   EEPROM.write(1, selected_system_index);
   EEPROM.write(2, selected_cutoff_value);
   EEPROM.write(3, selected_turnon_value);
-  Serial.println("Writing prefs to eeprom");
+  EEPROM.write(4, selected_slave);
+  EEPROM.write(5, false);
+  ////Serial1.println("Writing prefs to eeprom");
   EEPROM.commit();
 }
 
@@ -284,6 +291,7 @@ void renderPage(uint8_t p)
   {
   case 1:
   {
+    bool should_render_power = false;
     if (p != page)
     {
       drawBattery();
@@ -305,41 +313,46 @@ void renderPage(uint8_t p)
     }
     uint16_t raw_current = node.getResponseBuffer(7);
     float new_current = 0.0;
+    Serial1.println("idle "+String(is_idle)+" charging: "+ String(is_charging)+ " discharging: "+String(is_discharging));
     if (raw_current == 0)
     {
+      is_charging = false;
+      is_discharging = false;
       if (!is_idle)
       {
         is_idle = true;
+        should_render_power = true;
         batteryChargeModeChanged();
       }
-      is_charging = false;
-      is_discharging = false;
     }
     else if (raw_current >= 30000)
     {
+       is_idle = false;
+      is_discharging = false;
       if (is_charging == false)
       {
         is_charging = true;
+        should_render_power = true;
         batteryChargeModeChanged();
       }
-
-      is_idle = false;
-      is_discharging = false;
       new_current = (65535 - raw_current) / 10.0f;
     }
     else
     {
+      is_charging = false;
+      is_idle = false;
       if (is_discharging == false)
       {
         is_discharging = true;
+        should_render_power = true;
         batteryChargeModeChanged();
       }
-      is_charging = false;
-      is_idle = false;
       new_current = raw_current / 10.0f;
     }
-    if (current != new_current)
+    Serial1.println("should render power "+ String(should_render_power));
+    if (current != new_current || should_render_power)
     {
+      should_render_power = false;
       current = new_current;
       watts = (current * idealVoltage(voltage)) / 1000.0f;
       printString(String(watts) + "kW", 33, 191, 135, font_height, charge_color);
@@ -354,9 +367,9 @@ void renderPage(uint8_t p)
     uint8_t r = 42;
     uint16_t accumulated_volts = 0.0;
     static std::vector<uint16_t> raw_cell_values;
-    // Serial1.print("page = ");
-    // Serial1.print(page);
-    // Serial1.println(" vs " + String(raw_cell_values.size()));
+    // //Serial1.print("page = ");
+    // //Serial1.print(page);
+    // //Serial1.println(" vs " + String(raw_cell_values.size()));
     if (page != 2)
       raw_cell_values.clear();
     if (raw_cell_values.size() >= 100)
@@ -369,7 +382,7 @@ void renderPage(uint8_t p)
       accumulated_volts += raw_cell_volt;
       if (i >= vs || std::abs(raw_cell_values.at(i) - raw_cell_volt) >= 20)
       {
-        // Serial1.println(cell_volt);
+        // //Serial1.println(cell_volt);
         printString(String(cell_volt, 2), x, y, 55, font_height, TFT_WHITE, &FreeSans12pt7b);
         if (i < vs)
           raw_cell_values[i] = raw_cell_volt;
@@ -382,11 +395,11 @@ void renderPage(uint8_t p)
         x = 40;
         y += 70;
       }
-      // Serial1.print("av ");
-      // Serial1.print(accumulated_volts);
-      // Serial1.print(" v ");
-      // Serial1.print(raw_voltage);
-      // Serial1.println("=..=..=..=..=..=..=..=..=");
+      // //Serial1.print("av ");
+      // //Serial1.print(accumulated_volts);
+      // //Serial1.print(" v ");
+      // //Serial1.print(raw_voltage);
+      // //Serial1.println("=..=..=..=..=..=..=..=..=");
       if (raw_voltage * 10 - accumulated_volts <= 50)
         break;
       ++r;
@@ -396,7 +409,7 @@ void renderPage(uint8_t p)
   case 3:
   {
     if (page == 3)
-      return;
+      break;
     readPerefs();
     clearToast();
     printString("Baud", 10, 20, tft.textWidth("Baud"), font_height, TFT_WHITE);
@@ -436,9 +449,12 @@ void modbusInfo()
 
 void comTest()
 {
-  if (selected_baud == 0)
-  {
-    for (uint8_t i = 1; i < 11; ++i)
+  uint8_t start_pos = (selected_baud_index== 0) ? 1 : selected_baud_index;
+  uint8_t upto = (selected_baud_index== 0) ? 11 : selected_baud_index+ 1;
+
+  //Serial1.println("start "+String(start_pos) + "end "+String(upto));
+ 
+    for (uint8_t i = start_pos; i < upto; ++i)
     {
       uint32_t baud = baud_rates[i].toInt();
       Serial.end();
@@ -461,7 +477,7 @@ void comTest()
     }
     settingsText("FAIL", TFT_RED);
     com_test = false;
-  }
+  
 }
 
 // void animateBattery()
@@ -503,7 +519,7 @@ bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
   uint16_t px = (p.x * sw) / 4095;
   uint16_t py = (p.y * sh) / 4095;
-  Serial.println("touch in " + String(px) + " " + String(py));
+  //Serial1.println("touch in " + String(px) + " " + String(py));
   return (px >= x && px <= x + w && py >= y && py <= y + h);
 }
 
@@ -521,9 +537,11 @@ void setup()
   // EEPROM.write(1,0);
   // EEPROM.write(2,20);
   // EEPROM.write(3,25);
+  // EEPROM.write(4, 1);
+  // EEPROM.write(5, true);
   // EEPROM.commit();
   // rs485.begin(9600);      // RS485 baud rate (SoftwareSerial is 8N1 only)
-
+  readPerefs();
   // Initialize Modbus communication
   node.begin(selected_slave, Serial); // Slave ID = 1
   node.preTransmission(preTransmission);
@@ -532,7 +550,7 @@ void setup()
   // SPI.begin();  // GPIO14=SCK, GPIO13=MOSI, GPIO12=MISO
   ts.begin();
   ts.setRotation(3); // Adjust rotation to match your TFT
-  Serial1.println("XPT2046 Touch test");
+  //Serial1.println("XPT2046 Touch test");
   tft.init();
   tft.setRotation(1);
   tft.fillScreen(TFT_BLACK);
@@ -544,7 +562,7 @@ void setup()
   baudSelector.setOnChange(
       [](uint8_t newVal)
       {
-        Serial.println("baud to " + String(newVal));
+        //Serial1.println("baud to " + String(newVal));
         selected_baud_index = newVal;
         settings_changed = true;
         settings_timer = millis();
@@ -552,7 +570,7 @@ void setup()
   systemSelector.setOnChange(
       [](uint8_t newVal)
       {
-        Serial.println("system to " + String(newVal));
+        //Serial1.println("system to " + String(newVal));
 
         selected_system_index = newVal;
         settings_changed = true;
@@ -561,7 +579,7 @@ void setup()
   cutOffSelector.setOnChange(
       [](uint8_t newVal)
       {
-        Serial.println("cut off to " + String(newVal));
+        //Serial1.println("cut off to " + String(newVal));
 
         selected_cutoff_value = newVal;
         turnONSelector.setMinValue(newVal + 5);
@@ -571,7 +589,7 @@ void setup()
   turnONSelector.setOnChange(
       [](uint8_t newVal)
       {
-        Serial.println("turn on to " + String(newVal));
+        //Serial1.println("turn on to " + String(newVal));
 
         selected_turnon_value = newVal;
         settings_changed = true;
@@ -585,13 +603,19 @@ void setup()
       });
   sw = tft.width();
   sh = tft.height();
+  
+ drawBottomNav(); 
 
-  // drawBattery();
-  // drawPage1Info();
-  drawBottomNav();
+  if(first_run){
+    renderPage(3);
+    return;
+  }    
+
+  drawBattery();
+  drawPage1Info();
+  
 
   // baudSelector = Selector(baud_rates, 10, 100, 100, 200);
-  renderPage(3);
   // tft.drawRect(270,140,60,60, TFT_CYAN);
   // tft.drawRect(70,240,60,60, TFT_CYAN);
 }
@@ -599,16 +623,13 @@ void setup()
 void loop()
 {
   if (com_test)
-  {
-
     return;
-  }
   if (ts.touched() && millis() - touch >= 250)
   {
     TS_Point p = ts.getPoint();
     if (touchIn(p, 350, 230, 46, 46))
     {
-      // Serial.println("x y touch");
+      // //Serial1.println("x y touch");
       renderPage(page + 1);
     }
     if (touchIn(p, 55, 250, 46, 46))
@@ -637,84 +658,9 @@ void loop()
   // getBatteryInfo();
   if (millis() - page1Info >= 1000)
   {
+    //Serial1.println("reading modbus and rendering page , current page "+String(page));
     modbusInfo();
-    // renderPage(page);
+    renderPage(page);
     page1Info = millis();
   }
-
-  // if(millis() - test >= 5000){
-  //     renderPage(p1 ? 1 : 2);
-  //     p1 = !p1 ;
-  //     test = millis();
-  // }
-
-  // if (millis() - page1Info >= 500)
-  // {
-  //   // getBatteryInfo();
-  //   renderPage(page);
-  //   page1Info = millis();
-  // }
 }
-
-// #include <Arduino.h>
-// #include <SoftwareSerial.h>
-// #include <ModbusMaster.h>
-
-// // MAX485 control pins
-// #define DE 0
-// #define RE 0
-
-// // RS485 on SoftwareSerial (RO=D2, DI=D3)
-// //SoftwareSerial rs485(2, 3); // RX, TX
-
-// // Create ModbusMaster instance
-// ModbusMaster node;
-
-// void preTransmission() {
-//   digitalWrite(DE, HIGH);
-//   digitalWrite(RE, HIGH);
-//   delayMicroseconds(300);
-// }
-
-// void postTransmission() {
-//   digitalWrite(DE, LOW);
-//   digitalWrite(RE, LOW);
-//   delayMicroseconds(300);
-// }
-
-// void setup() {
-//   // Control pins
-//   pinMode(DE, OUTPUT);
-//   pinMode(RE, OUTPUT);
-//   digitalWrite(DE, LOW);
-//   digitalWrite(RE, LOW);
-
-//   Serial.begin(9600);     // Debugging
-//   Serial1.begin(115200);
-//   //rs485.begin(9600);      // RS485 baud rate (SoftwareSerial is 8N1 only)
-
-//   // Initialize Modbus communication
-//   node.begin(1, Serial);   // Slave ID = 1
-//   node.preTransmission(preTransmission);
-//   node.postTransmission(postTransmission);
-// }
-
-// void loop() {
-//   // Send request: function 03, start address 0x1300, read 32 registers
-//   uint8_t result = node.readHoldingRegisters(0x1300, 74);
-
-//   if (result == node.ku8MBSuccess) {
-//     Serial1.println("Response received:");
-//     for (uint8_t i = 0; i < 74; i++) {
-//       Serial1.print("Reg ");
-//       Serial1.print(i);
-//       Serial1.print(": ");
-//       Serial1.println(node.getResponseBuffer(i));
-//     }
-//   } else {
-//     Serial1.print("Error code: ");
-//     Serial1.println(result);
-//   }
-
-//   delay(12000);
-// }

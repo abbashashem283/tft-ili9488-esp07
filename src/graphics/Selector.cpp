@@ -96,7 +96,7 @@ void Selector::setValue(int8_t val, bool render_value )
         currentValue = maxValue;
     else if(val > maxValue)
         currentValue = minValue;    
-    Serial.println("value is "+String(currentValue));
+    //Serial1.println("value is "+String(currentValue));
     if(render_value)
         displayText(String(currentValue));
     if(onChange)    
@@ -109,7 +109,7 @@ uint8_t Selector::getValue() {
 
 void Selector::setCurrentIndex(int8_t index, bool render_value)
 {
-    Serial.println("index: " + String(index) + " currentIndex: " + String(currentIndex));
+    //Serial1.println("index: " + String(index) + " currentIndex: " + String(currentIndex));
     currentIndex = index;
     if (currentIndex < 0)
         currentIndex = optionCount - 1;
@@ -134,7 +134,7 @@ void Selector::render()
         option = String(currentValue);
     else
         option = options[currentIndex];
-    Serial.println("val is " + String(value) + " and currentIndex is " + String(currentIndex));
+    ////Serial1.println("val is " + String(value) + " and currentIndex is " + String(currentIndex));
     uint8_t input_width = tft.textWidth(option);
     uint8_t remaining_space = text_width - input_width;
     printString(option, posX + remaining_space / 2, posY, input_width, font_height, TFT_WHITE, &FreeSans18pt7b, TFT_BLACK);
@@ -154,7 +154,7 @@ void Selector::handleTouch(TS_Point p)
     uint16_t ly = posY + 20;
     uint16_t rx = posX + text_width;
     uint16_t ry = posY + 20;
-    Serial.println("current index "+ String(currentIndex));
+    //Serial1.println("current index "+ String(currentIndex));
     if (touchIn(p, lx - 30, ly - 30, 60, 60))
     {
         if(currentIndex == -1)
