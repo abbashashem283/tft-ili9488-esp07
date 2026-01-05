@@ -1,10 +1,15 @@
+#include <FS.h>
+using namespace fs;
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
 #include <ModbusMaster.h>
+#include <ESP8266WebServer.h>
+#include <ESP8266WiFi.h>
 #include "graphics/Selector.h"
 #include "graphics/Button.h"
+
 
 // Pins
 #define CS_PIN 16   // Chip select for XPT2046
@@ -43,6 +48,7 @@ String com_systems[] = {"FEBS", "PABS"};
 // unsigned long bat_blink = 0;
 unsigned long settings_timer = 0;
 unsigned long touch = 0;
+unsigned long wifi_connect_timer = 0;
 bool bat_blink_white = true;
 
 unsigned long page1Info = 0;
@@ -59,6 +65,8 @@ Selector turnONSelector(5, 100, 5, 240, 200, 200);
 Button comButton("COM", TFT_GREEN, 100, 50, TFT_BLACK, true);
 
 bool settings_changed = false;
+
+ESP8266WebServer esp07Server(80);
 
 void preTransmission()
 {
@@ -161,6 +169,8 @@ void clearPage(uint8_t p)
   switch (p)
   {
   case 1:
+    tft.fillRect(10,10,50,50,TFT_BLACK);
+    yield();
     tft.fillRect(188, 67, 104, 176, TFT_BLACK);
     tft.fillRect(33, 89, 135, font_height, TFT_BLACK);
     tft.fillRect(33, 191, 135, font_height, TFT_BLACK);
@@ -276,6 +286,17 @@ void writePerefs()
   EEPROM.commit();
 }
 
+void drawWiFiSymbol(int x, int y, int size, uint16_t color) {
+    // Draw three arcs (semi-circles) for WiFi signal
+    for (int i = 0; i < 3; i++) {
+        int r = size + i * (size / 2); // radius increases with each arc
+        tft.drawArc(x, y, r, r, 135 , 225, color, TFT_BLACK); // 90° arc
+    }
+
+    // Draw the base dot
+    tft.fillCircle(x, y + size / 2 /*+ (size / 2) * 3*/, size / 5, color);
+}
+
 void renderPage(uint8_t p)
 {
   p = p > MAX_PAGE_NB ? 1 : p;
@@ -297,6 +318,8 @@ void renderPage(uint8_t p)
       drawBattery();
       drawBatterySOC();
       drawPage1Info();
+      if(WiFi.status() == WL_CONNECTED)
+        drawWiFiSymbol(20,25,10,TFT_WHITE);
     }
     float new_voltage = raw_voltage / 100.0f;
     if (new_voltage != voltage)
@@ -523,6 +546,107 @@ bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
   return (px >= x && px <= x + w && py >= y && py <= y + h);
 }
 
+
+#include <EEPROM.h>
+
+void saveWifiPrefs(String ssid, String password) {
+  char c_ssid[33];      // 32 + '\0'
+  char c_password[64];  // 63 + '\0'
+
+  ssid.toCharArray(c_ssid, sizeof(c_ssid));
+  password.toCharArray(c_password, sizeof(c_password));
+
+  EEPROM.write(6,true);
+
+  // Store SSID at address 6
+  EEPROM.put(7, c_ssid);
+
+  // Store password right after SSID (6 + 33 = 39)
+  EEPROM.put(40, c_password);
+
+  EEPROM.commit(); // required on ESP8266/ESP32
+}
+
+bool wifiPrefsExist() { 
+  bool wifiPrefsAvailable = EEPROM.read(6);   
+  return wifiPrefsAvailable;
+}
+
+
+
+
+
+void connectToWifi(String ssid, String password){
+      Serial1.println("Connecting to: " + ssid);
+      
+      WiFi.begin(ssid.c_str(), password.c_str());
+      
+      uint8_t attempts = 0;
+
+      while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500);
+        attempts++;
+      }
+}
+
+
+void wifiConfig() {
+  IPAddress local_IP(192, 168, 4, 1);    // Your custom IP
+  IPAddress gateway(192, 168, 4, 1);     // Gateway (usually same as IP)
+  IPAddress subnet(255, 255, 255, 0);     // Subnet mask
+  WiFi.mode(WIFI_AP_STA);
+  // Configure the soft AP with custom IP
+  WiFi.softAPConfig(local_IP, gateway, subnet);
+  
+  // Then start the AP
+  String apSSID = "BC-" + String(ESP.getChipId());
+  WiFi.softAP(apSSID.c_str(), "password123");
+  
+  Serial1.print("AP IP address: ");
+  Serial1.println(WiFi.softAPIP()); // Will print your custom IP
+  
+  esp07Server.begin();
+
+  if(wifiPrefsExist()){
+    char c_ssid[33];
+    char c_password[64];
+    EEPROM.get(7,c_ssid);
+    EEPROM.get(40,c_password);
+    connectToWifi(String(c_ssid), String(c_password));
+  }
+}
+
+void serverSetup(){
+   esp07Server.on("/config", HTTP_POST, []() {
+    if (esp07Server.hasArg("ssid") && esp07Server.hasArg("password")) {
+      String ssid = esp07Server.arg("ssid");
+      String password = esp07Server.arg("password");
+      
+      // Serial1.println("Connecting to: " + ssid);
+      
+      // WiFi.begin(ssid.c_str(), password.c_str());
+      
+      // uint8_t attempts = 0;
+
+      // while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      //   delay(500);
+      //   attempts++;
+      // }
+
+      connectToWifi(ssid, password);
+      
+      if (WiFi.status() == WL_CONNECTED) {
+        esp07Server.send(200, "text/plain", "connection-ok");
+        saveWifiPrefs(ssid, password);
+      } else {
+        esp07Server.send(200, "text/plain", "connection-failed");
+      }
+    } else {
+      esp07Server.send(400, "text/plain", "connection-failed");
+    }
+  });
+}
+
 void setup()
 {
   pinMode(DE, OUTPUT);
@@ -559,6 +683,8 @@ void setup()
   tft.setFreeFont(&FreeSans18pt7b);
   font_height = tft.fontHeight();
   readPerefs();
+  wifiConfig();
+  serverSetup();
   baudSelector.setOnChange(
       [](uint8_t newVal)
       {
@@ -624,6 +750,7 @@ void loop()
 {
   if (com_test)
     return;
+   esp07Server.handleClient(); 
   if (ts.touched() && millis() - touch >= 250)
   {
     TS_Point p = ts.getPoint();
