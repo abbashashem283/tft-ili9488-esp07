@@ -10,7 +10,6 @@ using namespace fs;
 #include "graphics/Selector.h"
 #include "graphics/Button.h"
 
-
 // Pins
 #define CS_PIN 16   // Chip select for XPT2046
 #define TIRQ_PIN -1 // Optional, can be -1 if unused
@@ -44,6 +43,7 @@ uint16_t charge_color = TFT_WHITE;
 String baud_rates[] = {"AUTO", "1200", "2400", "4800", "9600", "14400", "19200", "38400", "56000", "57600", "115200"};
 String com_systems[] = {"FEBS", "PABS"};
 
+String wifi_ssid, wifi_password;
 
 // unsigned long bat_blink = 0;
 unsigned long settings_timer = 0;
@@ -67,6 +67,9 @@ Button comButton("COM", TFT_GREEN, 100, 50, TFT_BLACK, true);
 bool settings_changed = false;
 
 ESP8266WebServer esp07Server(80);
+
+bool wifi_symbol_rendered = false;
+bool connecting_to_wifi = false;
 
 void preTransmission()
 {
@@ -164,12 +167,20 @@ uint8_t idealVoltage(float voltage)
   return nominal;
 }
 
+void clearWifiSymbol()
+{
+  if (!wifi_symbol_rendered)
+    return;
+  tft.fillRect(0, 0, 40, 40, TFT_BLACK);
+  wifi_symbol_rendered = false;
+}
+
 void clearPage(uint8_t p)
 {
   switch (p)
   {
   case 1:
-    tft.fillRect(10,10,50,50,TFT_BLACK);
+    clearWifiSymbol();
     yield();
     tft.fillRect(188, 67, 104, 176, TFT_BLACK);
     tft.fillRect(33, 89, 135, font_height, TFT_BLACK);
@@ -261,7 +272,7 @@ void errorStatChanged(uint8_t result)
 
 void readPerefs()
 {
-  selected_baud_index= EEPROM.read(0);
+  selected_baud_index = EEPROM.read(0);
   selected_system_index = EEPROM.read(1);
   selected_cutoff_value = EEPROM.read(2);
   selected_turnon_value = EEPROM.read(3);
@@ -286,15 +297,25 @@ void writePerefs()
   EEPROM.commit();
 }
 
-void drawWiFiSymbol(int x, int y, int size, uint16_t color) {
-    // Draw three arcs (semi-circles) for WiFi signal
-    for (int i = 0; i < 3; i++) {
-        int r = size + i * (size / 2); // radius increases with each arc
-        tft.drawArc(x, y, r, r, 135 , 225, color, TFT_BLACK); // 90° arc
-    }
+bool connectedToWifi()
+{
+  return WiFi.status() == WL_CONNECTED;
+}
 
-    // Draw the base dot
-    tft.fillCircle(x, y + size / 2 /*+ (size / 2) * 3*/, size / 5, color);
+void drawWiFiSymbol(int x, int y, int size, uint16_t color)
+{
+  if (wifi_symbol_rendered)
+    return;
+  // Draw three arcs (semi-circles) for WiFi signal
+  for (int i = 0; i < 3; i++)
+  {
+    int r = size + i * (size / 2);                       // radius increases with each arc
+    tft.drawArc(x, y, r, r, 135, 225, color, TFT_BLACK); // 90° arc
+  }
+
+  // Draw the base dot
+  tft.fillCircle(x, y + size / 2.5 /*+ (size / 2) * 3*/, size / 5, color);
+  wifi_symbol_rendered = true;
 }
 
 void renderPage(uint8_t p)
@@ -318,8 +339,10 @@ void renderPage(uint8_t p)
       drawBattery();
       drawBatterySOC();
       drawPage1Info();
-      if(WiFi.status() == WL_CONNECTED)
-        drawWiFiSymbol(20,25,10,TFT_WHITE);
+      if (connectedToWifi())
+      {
+        drawWiFiSymbol(20, 25, 10, TFT_WHITE);
+      }
     }
     float new_voltage = raw_voltage / 100.0f;
     if (new_voltage != voltage)
@@ -336,7 +359,7 @@ void renderPage(uint8_t p)
     }
     uint16_t raw_current = node.getResponseBuffer(7);
     float new_current = 0.0;
-    Serial1.println("idle "+String(is_idle)+" charging: "+ String(is_charging)+ " discharging: "+String(is_discharging));
+    Serial1.println("idle " + String(is_idle) + " charging: " + String(is_charging) + " discharging: " + String(is_discharging));
     if (raw_current == 0)
     {
       is_charging = false;
@@ -350,7 +373,7 @@ void renderPage(uint8_t p)
     }
     else if (raw_current >= 30000)
     {
-       is_idle = false;
+      is_idle = false;
       is_discharging = false;
       if (is_charging == false)
       {
@@ -372,7 +395,7 @@ void renderPage(uint8_t p)
       }
       new_current = raw_current / 10.0f;
     }
-    Serial1.println("should render power "+ String(should_render_power));
+    Serial1.println("should render power " + String(should_render_power));
     if (current != new_current || should_render_power)
     {
       should_render_power = false;
@@ -472,35 +495,34 @@ void modbusInfo()
 
 void comTest()
 {
-  uint8_t start_pos = (selected_baud_index== 0) ? 1 : selected_baud_index;
-  uint8_t upto = (selected_baud_index== 0) ? 11 : selected_baud_index+ 1;
+  uint8_t start_pos = (selected_baud_index == 0) ? 1 : selected_baud_index;
+  uint8_t upto = (selected_baud_index == 0) ? 11 : selected_baud_index + 1;
 
-  //Serial1.println("start "+String(start_pos) + "end "+String(upto));
- 
-    for (uint8_t i = start_pos; i < upto; ++i)
+  // Serial1.println("start "+String(start_pos) + "end "+String(upto));
+
+  for (uint8_t i = start_pos; i < upto; ++i)
+  {
+    uint32_t baud = baud_rates[i].toInt();
+    Serial.end();
+    Serial.begin(baud);
+    delay(200);
+    for (uint8_t j = 1; j <= MAX_SLAVE_NB; ++j)
     {
-      uint32_t baud = baud_rates[i].toInt();
-      Serial.end();
-      Serial.begin(baud);
-      delay(200);
-      for (uint8_t j = 1; j <= MAX_SLAVE_NB; ++j)
+      settingsText("S-" + String(j));
+      node.begin(j, Serial);
+      uint8_t result = node.readHoldingRegisters(0x1300, 1);
+      if (result == node.ku8MBSuccess)
       {
-        settingsText("S-" + String(j));
-        node.begin(j, Serial);
-        uint8_t result = node.readHoldingRegisters(0x1300, 1);
-        if (result == node.ku8MBSuccess)
-        {
-          selected_slave = j;
-          baudSelector.setCurrentIndex(i);
-          settingsText("PASS", TFT_GREEN);
-          com_test = false;
-          return;
-        }
+        selected_slave = j;
+        baudSelector.setCurrentIndex(i);
+        settingsText("PASS", TFT_GREEN);
+        com_test = false;
+        return;
       }
     }
-    settingsText("FAIL", TFT_RED);
-    com_test = false;
-  
+  }
+  settingsText("FAIL", TFT_RED);
+  com_test = false;
 }
 
 // void animateBattery()
@@ -542,21 +564,21 @@ bool touchIn(TS_Point p, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
   uint16_t px = (p.x * sw) / 4095;
   uint16_t py = (p.y * sh) / 4095;
-  //Serial1.println("touch in " + String(px) + " " + String(py));
+  // Serial1.println("touch in " + String(px) + " " + String(py));
   return (px >= x && px <= x + w && py >= y && py <= y + h);
 }
 
-
 #include <EEPROM.h>
 
-void saveWifiPrefs(String ssid, String password) {
-  char c_ssid[33];      // 32 + '\0'
-  char c_password[64];  // 63 + '\0'
+void saveWifiPrefs(String ssid, String password)
+{
+  char c_ssid[33];     // 32 + '\0'
+  char c_password[64]; // 63 + '\0'
 
   ssid.toCharArray(c_ssid, sizeof(c_ssid));
   password.toCharArray(c_password, sizeof(c_password));
 
-  EEPROM.write(6,true);
+  EEPROM.write(6, true);
 
   // Store SSID at address 6
   EEPROM.put(7, c_ssid);
@@ -564,63 +586,76 @@ void saveWifiPrefs(String ssid, String password) {
   // Store password right after SSID (6 + 33 = 39)
   EEPROM.put(40, c_password);
 
+  wifi_ssid = ssid;
+  wifi_password = password;
+
   EEPROM.commit(); // required on ESP8266/ESP32
 }
 
-bool wifiPrefsExist() { 
-  bool wifiPrefsAvailable = EEPROM.read(6);   
+bool wifiPrefsExist()
+{
+  if (!wifi_ssid.isEmpty() && !wifi_password.isEmpty())
+    return true;
+  bool wifiPrefsAvailable = EEPROM.read(6);
   return wifiPrefsAvailable;
 }
 
+void connectToWifi(bool blocking = false)
+{
 
+  connecting_to_wifi = true;
+  WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
+  wifi_connect_timer = millis();
+  if (blocking)
+  {
+    uint8_t attempts = 0;
 
-
-
-void connectToWifi(String ssid, String password){
-      Serial1.println("Connecting to: " + ssid);
-      
-      WiFi.begin(ssid.c_str(), password.c_str());
-      
-      uint8_t attempts = 0;
-
-      while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-        delay(500);
-        attempts++;
-      }
-}
-
-
-void wifiConfig() {
-  IPAddress local_IP(192, 168, 4, 1);    // Your custom IP
-  IPAddress gateway(192, 168, 4, 1);     // Gateway (usually same as IP)
-  IPAddress subnet(255, 255, 255, 0);     // Subnet mask
-  WiFi.mode(WIFI_AP_STA);
-  // Configure the soft AP with custom IP
-  WiFi.softAPConfig(local_IP, gateway, subnet);
-  
-  // Then start the AP
-  String apSSID = "BC-" + String(ESP.getChipId());
-  WiFi.softAP(apSSID.c_str(), "password123");
-  
-  Serial1.print("AP IP address: ");
-  Serial1.println(WiFi.softAPIP()); // Will print your custom IP
-  
-  esp07Server.begin();
-
-  if(wifiPrefsExist()){
-    char c_ssid[33];
-    char c_password[64];
-    EEPROM.get(7,c_ssid);
-    EEPROM.get(40,c_password);
-    connectToWifi(String(c_ssid), String(c_password));
+    while (!connectedToWifi() && attempts < 20)
+    {
+      delay(500);
+      attempts++;
+    }
+    connecting_to_wifi = false;
   }
 }
 
-void serverSetup(){
-   esp07Server.on("/config", HTTP_POST, []() {
+void wifiConfig()
+{
+  IPAddress local_IP(192, 168, 4, 1); // Your custom IP
+  IPAddress gateway(192, 168, 4, 1);  // Gateway (usually same as IP)
+  IPAddress subnet(255, 255, 255, 0); // Subnet mask
+  WiFi.mode(WIFI_AP_STA);
+  // Configure the soft AP with custom IP
+  WiFi.softAPConfig(local_IP, gateway, subnet);
+
+  // Then start the AP
+  String apSSID = "BC-" + String(ESP.getChipId());
+  WiFi.softAP(apSSID.c_str(), "password123");
+
+  Serial1.print("AP IP address: ");
+  Serial1.println(WiFi.softAPIP()); // Will print your custom IP
+
+  esp07Server.begin();
+
+  if (wifiPrefsExist())
+  {
+    char c_ssid[33];
+    char c_password[64];
+    EEPROM.get(7, c_ssid);
+    EEPROM.get(40, c_password);
+    wifi_ssid = c_ssid;
+    wifi_password = c_password;
+    connectToWifi();
+  }
+}
+
+void serverSetup()
+{
+  esp07Server.on("/config", HTTP_POST, []()
+                 {
     if (esp07Server.hasArg("ssid") && esp07Server.hasArg("password")) {
-      String ssid = esp07Server.arg("ssid");
-      String password = esp07Server.arg("password");
+      wifi_ssid = esp07Server.arg("ssid");
+      wifi_password = esp07Server.arg("password");
       
       // Serial1.println("Connecting to: " + ssid);
       
@@ -633,18 +668,38 @@ void serverSetup(){
       //   attempts++;
       // }
 
-      connectToWifi(ssid, password);
+
+      connectToWifi(true);
       
-      if (WiFi.status() == WL_CONNECTED) {
+      if (connectedToWifi()) {
         esp07Server.send(200, "text/plain", "connection-ok");
-        saveWifiPrefs(ssid, password);
+        saveWifiPrefs(wifi_ssid, wifi_password);
       } else {
         esp07Server.send(200, "text/plain", "connection-failed");
       }
     } else {
       esp07Server.send(400, "text/plain", "connection-failed");
-    }
-  });
+    } });
+}
+
+void wifiLoop()
+{
+
+  if (connectedToWifi())
+  {
+    drawWiFiSymbol(20, 25, 10, TFT_WHITE);
+    connecting_to_wifi = false;
+  }
+  else
+    clearWifiSymbol();
+
+  if (wifiPrefsExist() && !connectedToWifi() && !connecting_to_wifi)
+  {
+    connectToWifi();
+  }
+
+  if (connecting_to_wifi && millis() - wifi_connect_timer >= 60000)
+    connecting_to_wifi = false;
 }
 
 void setup()
@@ -674,7 +729,7 @@ void setup()
   // SPI.begin();  // GPIO14=SCK, GPIO13=MOSI, GPIO12=MISO
   ts.begin();
   ts.setRotation(3); // Adjust rotation to match your TFT
-  //Serial1.println("XPT2046 Touch test");
+  // Serial1.println("XPT2046 Touch test");
   tft.init();
   tft.setRotation(1);
   tft.fillScreen(TFT_BLACK);
@@ -688,7 +743,7 @@ void setup()
   baudSelector.setOnChange(
       [](uint8_t newVal)
       {
-        //Serial1.println("baud to " + String(newVal));
+        // Serial1.println("baud to " + String(newVal));
         selected_baud_index = newVal;
         settings_changed = true;
         settings_timer = millis();
@@ -696,7 +751,7 @@ void setup()
   systemSelector.setOnChange(
       [](uint8_t newVal)
       {
-        //Serial1.println("system to " + String(newVal));
+        // Serial1.println("system to " + String(newVal));
 
         selected_system_index = newVal;
         settings_changed = true;
@@ -705,7 +760,7 @@ void setup()
   cutOffSelector.setOnChange(
       [](uint8_t newVal)
       {
-        //Serial1.println("cut off to " + String(newVal));
+        // Serial1.println("cut off to " + String(newVal));
 
         selected_cutoff_value = newVal;
         turnONSelector.setMinValue(newVal + 5);
@@ -715,7 +770,7 @@ void setup()
   turnONSelector.setOnChange(
       [](uint8_t newVal)
       {
-        //Serial1.println("turn on to " + String(newVal));
+        // Serial1.println("turn on to " + String(newVal));
 
         selected_turnon_value = newVal;
         settings_changed = true;
@@ -729,17 +784,17 @@ void setup()
       });
   sw = tft.width();
   sh = tft.height();
-  
- drawBottomNav(); 
 
-  if(first_run){
+  drawBottomNav();
+
+  if (first_run)
+  {
     renderPage(3);
     return;
-  }    
+  }
 
   drawBattery();
   drawPage1Info();
-  
 
   // baudSelector = Selector(baud_rates, 10, 100, 100, 200);
   // tft.drawRect(270,140,60,60, TFT_CYAN);
@@ -750,7 +805,7 @@ void loop()
 {
   if (com_test)
     return;
-   esp07Server.handleClient(); 
+  esp07Server.handleClient();
   if (ts.touched() && millis() - touch >= 250)
   {
     TS_Point p = ts.getPoint();
@@ -775,17 +830,16 @@ void loop()
     touch = millis();
   }
 
-
-   if (settings_changed && millis() - settings_timer >= 60000)
-      {
-        writePerefs();
-        settings_changed = false;
-        settings_timer = millis();
-      }
+  if (settings_changed && millis() - settings_timer >= 60000)
+  {
+    writePerefs();
+    settings_changed = false;
+    settings_timer = millis();
+  }
   // getBatteryInfo();
   if (millis() - page1Info >= 1000)
   {
-    //Serial1.println("reading modbus and rendering page , current page "+String(page));
+    // Serial1.println("reading modbus and rendering page , current page "+String(page));
     modbusInfo();
     renderPage(page);
     page1Info = millis();
